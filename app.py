@@ -24,6 +24,7 @@ from utils.qr_reader import QRReader
 from utils.llm_processor import LLMProcessor
 from utils.vision_processor import VisionProcessor
 from utils.vcf_generator import VCFGenerator
+from utils.export_processor import ExportProcessor
 
 
 # Page configuration
@@ -684,49 +685,121 @@ def main():
         if st.session_state.processing_complete and st.session_state.processed_cards:
             st.markdown("## 💾 Download Contacts")
             
+            # Initialize export processor
+            export_processor = ExportProcessor()
+            
+            # Export format selection
+            st.markdown("### 📦 Choose Export Formats")
+            export_col1, export_col2, export_col3 = st.columns(3)
+            
+            with export_col1:
+                include_vcf = st.checkbox("VCF (Outlook/Contacts)", value=True, help="vCard format for contact managers")
+            with export_col2:
+                include_csv = st.checkbox("CSV", value=True, help="Spreadsheet format")
+            with export_col3:
+                include_excel = st.checkbox("Excel (XLSX)", value=True, help="Microsoft Excel format")
+            
+            outlook_csv = st.checkbox("Outlook Import CSV", value=False, help="Special CSV format for Outlook import")
+            
+            # Prepare export data
+            contacts = [card['contact_data'] for card in st.session_state.processed_cards]
+            for i, card in enumerate(st.session_state.processed_cards):
+                contacts[i]['source'] = card.get('source_file', 'Unknown')
+            
+            # Show stats
+            stats = export_processor.get_export_stats(contacts)
+            st.info(f"📊 **Export Summary:** {stats['total']} contacts | "
+                   f"{stats['with_email']} with email | {stats['with_phone']} with phone | "
+                   f"{stats['with_company']} with company")
+            
+            st.markdown("---")
+            
+            # Download options
             download_col1, download_col2 = st.columns(2)
             
             with download_col1:
-                st.markdown("### Individual VCF Files")
+                st.markdown("### 📄 Individual Files")
                 
-                for card in st.session_state.processed_cards:
-                    st.download_button(
-                        label=f"📥 {card['filename']}.vcf",
-                        data=card['vcf_content'],
-                        file_name=f"{card['filename']}.vcf",
-                        mime="text/vcard"
-                    )
+                # Individual VCF downloads
+                if include_vcf:
+                    st.markdown("**VCF Files:**")
+                    for card in st.session_state.processed_cards:
+                        st.download_button(
+                            label=f"📥 {card['filename']}.vcf",
+                            data=card['vcf_content'],
+                            file_name=f"{card['filename']}.vcf",
+                            mime="text/vcard",
+                            key=f"vcf_{card['filename']}"
+                        )
             
             with download_col2:
-                st.markdown("### Bulk Download")
+                st.markdown("### 📦 Bulk Downloads")
+                timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
                 
-                # Create ZIP file with all VCF files
-                zip_buffer = BytesIO()
-                with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zip_file:
-                    for card in st.session_state.processed_cards:
-                        zip_file.writestr(
-                            f"{card['filename']}.vcf",
-                            card['vcf_content']
-                        )
+                # CSV Export
+                if include_csv:
+                    csv_data = export_processor.export_to_csv(contacts)
+                    st.download_button(
+                        label="📊 Download CSV",
+                        data=csv_data,
+                        file_name=f"contacts_{timestamp}.csv",
+                        mime="text/csv",
+                        help="Comma-separated values for Excel/Google Sheets"
+                    )
                 
-                zip_buffer.seek(0)
+                # Excel Export
+                if include_excel:
+                    excel_data = export_processor.export_to_excel(contacts)
+                    st.download_button(
+                        label="📗 Download Excel (XLSX)",
+                        data=excel_data,
+                        file_name=f"contacts_{timestamp}.xlsx",
+                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                        help="Microsoft Excel format with formatting"
+                    )
                 
-                st.download_button(
-                    label="📦 Download All VCF Files (ZIP)",
-                    data=zip_buffer,
-                    file_name=f"business_cards_{datetime.now().strftime('%Y%m%d_%H%M%S')}.zip",
-                    mime="application/zip"
+                # Outlook CSV Export
+                if outlook_csv:
+                    outlook_csv_data = export_processor.export_to_outlook_csv(contacts)
+                    st.download_button(
+                        label="📧 Download Outlook CSV",
+                        data=outlook_csv_data,
+                        file_name=f"outlook_import_{timestamp}.csv",
+                        mime="text/csv",
+                        help="Import this CSV directly into Outlook"
+                    )
+                
+                # Combined VCF
+                if include_vcf:
+                    combined_vcf = "\n".join(card['vcf_content'] for card in st.session_state.processed_cards)
+                    st.download_button(
+                        label="📋 Download Combined VCF",
+                        data=combined_vcf,
+                        file_name=f"all_contacts_{timestamp}.vcf",
+                        mime="text/vcard",
+                        help="All contacts in one VCF file"
+                    )
+                
+                # Complete Package (ZIP)
+                st.markdown("---")
+                st.markdown("**🎁 Complete Package:**")
+                vcf_files = [(f"{card['filename']}.vcf", card['vcf_content']) 
+                            for card in st.session_state.processed_cards]
+                
+                package_data = export_processor.create_export_package(
+                    contacts=contacts,
+                    vcf_files=vcf_files if include_vcf else [],
+                    include_csv=include_csv,
+                    include_excel=include_excel,
+                    include_outlook_csv=outlook_csv
                 )
                 
-                # Also offer combined VCF
-                vcf_generator = VCFGenerator()
-                combined_vcf = "\n".join(card['vcf_content'] for card in st.session_state.processed_cards)
-                
                 st.download_button(
-                    label="📋 Download Combined VCF File",
-                    data=combined_vcf,
-                    file_name=f"all_contacts_{datetime.now().strftime('%Y%m%d_%H%M%S')}.vcf",
-                    mime="text/vcard"
+                    label="🎁 Download Complete Package (ZIP)",
+                    data=package_data,
+                    file_name=f"contacts_package_{timestamp}.zip",
+                    mime="application/zip",
+                    help="ZIP file with all selected formats"
                 )
             
             # Summary

@@ -2,6 +2,64 @@
 
 All notable changes to the Business Card Scanner project will be documented in this file.
 
+## [1.2.0] - 2025-10-31
+
+### 🆕 Major Feature: Multiple Export Formats
+
+#### Added - Export Formats
+- **CSV Export**: Universal spreadsheet format for Excel/Google Sheets
+  - Includes source file column
+  - UTF-8 encoding for international characters
+  - Compatible with all spreadsheet applications
+- **Excel (XLSX) Export**: Professional formatted workbooks
+  - Auto-sized columns for readability
+  - Bold header row
+  - Optimized column widths (max 50 chars)
+  - Native Excel format with openpyxl
+- **Outlook Import CSV**: Special format for direct Outlook import
+  - Outlook-specific column names (Business Phone, Job Title, etc.)
+  - UTF-8 with BOM for perfect Excel/Outlook compatibility
+  - Pre-formatted for seamless import workflow
+- **Complete Export Package**: One-click ZIP download
+  - Combines all selected formats
+  - Individual VCF files in dedicated folder
+  - Timestamped bulk exports (CSV, XLSX, Outlook CSV)
+  - User selects which formats to include
+
+#### Added - Export UI Enhancements
+- **Format Selection Checkboxes**: Choose VCF, CSV, Excel, or Outlook CSV
+- **Export Statistics**: Summary showing contacts with email/phone/company
+- **Helpful Tooltips**: Explains each export format's purpose
+- **Organized Layout**: Individual files on left, bulk downloads on right
+- **Smart Defaults**: VCF and CSV enabled by default
+
+#### Added - New Module
+- `utils/export_processor.py`: Unified export handling
+  - `contacts_to_dataframe()`: Convert contacts to pandas DataFrame
+  - `export_to_csv()`: Generate CSV with optional source column
+  - `export_to_excel()`: Create formatted XLSX workbooks
+  - `export_to_outlook_csv()`: Outlook-compatible CSV format
+  - `create_export_package()`: Multi-format ZIP generator
+  - `get_export_stats()`: Calculate contact statistics
+
+#### Changed
+- Download section reorganized for better UX
+- Export options now customizable per user preference
+- ZIP package now includes multiple formats, not just VCF
+
+#### Dependencies
+- Added `pandas==2.0.3` for data manipulation
+- Added `openpyxl==3.1.2` for Excel file generation
+
+#### Benefits
+- ✅ Import contacts into CRM systems via CSV
+- ✅ Share formatted contact lists in Excel
+- ✅ Direct Outlook import without VCF hassles
+- ✅ Choose only the formats you need
+- ✅ One download for all formats
+
+---
+
 ## [1.1.0] - 2025-10-31 (improvements branch)
 
 ### 🎯 Major Feature: Vision Mode

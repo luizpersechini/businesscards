@@ -2,7 +2,7 @@
 
 A powerful web-based application that automatically extracts contact information from business card images and generates VCF (vCard) files ready to import into Outlook and other contact managers.
 
-**Version:** 1.1.0  
+**Version:** 1.2.0  
 **Status:** Production Ready ✅  
 **Last Updated:** October 31, 2025
 
@@ -20,7 +20,12 @@ A powerful web-based application that automatically extracts contact information
 - **Multi-language OCR**: English and Portuguese support (+ Spanish, French, German, Italian)
 - **QR Code Reading**: Dual detection (pyzbar + OpenCV fallback) with auto-fallback on errors
 - **LLM-Powered Parsing**: Uses Ollama to intelligently extract contact fields
-- **VCF Generation**: Creates Outlook-compatible vCard files (robust null handling)
+- **🆕 Multiple Export Formats (v1.2.0)**:
+  - **VCF (vCard)**: Outlook/Contacts/iPhone compatible format
+  - **CSV**: Universal spreadsheet format for Excel/Google Sheets
+  - **Excel (XLSX)**: Formatted workbook with auto-sized columns
+  - **Outlook CSV**: Special format for direct Outlook import
+  - **Complete Package**: ZIP with all selected formats
 - **Bulk Processing**: Process multiple cards and download as ZIP
 
 ### User Interface
@@ -42,6 +47,8 @@ A powerful web-based application that automatically extracts contact information
 - Process business cards collected at conferences and networking events
 - Digitize your physical business card collection
 - Quickly add contacts to Outlook after meetings
+- Export contacts to Excel/Google Sheets for CRM integration
+- Create mailing lists from business card scans
 - Batch process multiple cards efficiently
 
 ## 🛠️ Technology Stack
@@ -51,7 +58,9 @@ A powerful web-based application that automatically extracts contact information
 - **OCR**: EasyOCR (text extraction)
 - **QR Codes**: pyzbar (QR code reading)
 - **LLM**: Ollama API (contact structuring)
-- **VCF**: vobject (vCard generation)
+- **Export Formats**: 
+  - vobject (VCF/vCard generation)
+  - pandas + openpyxl (CSV & Excel export)
 
 ## 📋 Prerequisites
 
