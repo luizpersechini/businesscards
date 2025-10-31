@@ -8,4 +8,6 @@ vobject==0.9.7
 requests==2.31.0
 torch==2.1.0
 torchvision==0.16.0
+pandas==2.0.3
+openpyxl==3.1.2
 
