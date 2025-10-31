@@ -16,6 +16,26 @@ class VCFGenerator:
         """Initialize the VCF generator."""
         pass
     
+    def _sanitize_contact_data(self, contact_data: Dict) -> Dict:
+        """
+        Sanitize contact data by replacing None values with empty strings.
+        
+        Args:
+            contact_data: Raw contact data dictionary
+            
+        Returns:
+            Sanitized contact data dictionary
+        """
+        sanitized = {}
+        for key, value in contact_data.items():
+            if value is None or value == 'null' or value == 'None':
+                sanitized[key] = ''
+            elif isinstance(value, str):
+                sanitized[key] = value.strip()
+            else:
+                sanitized[key] = value
+        return sanitized
+    
     def create_vcard(self, contact_data: Dict) -> vobject.vCard:
         """
         Create a vCard object from contact data.
@@ -26,6 +46,9 @@ class VCFGenerator:
         Returns:
             vobject.vCard object
         """
+        # Sanitize contact data first
+        contact_data = self._sanitize_contact_data(contact_data)
+        
         # Create new vCard
         vcard = vobject.vCard()
         
@@ -46,66 +69,84 @@ class VCFGenerator:
         
         # Structured name (N)
         vcard.add('n')
+        last_name = contact_data.get('lastName', '') or ''
+        first_name = contact_data.get('firstName', '') or ''
         vcard.n.value = vobject.vcard.Name(
-            family=contact_data.get('lastName', ''),
-            given=contact_data.get('firstName', '')
+            family=last_name,
+            given=first_name
         )
         
         # Organization
-        if contact_data.get('company'):
+        company = contact_data.get('company')
+        if company and company.strip():
             vcard.add('org')
-            vcard.org.value = [contact_data['company']]
+            vcard.org.value = [company.strip()]
         
         # Title
-        if contact_data.get('title'):
+        title = contact_data.get('title')
+        if title and title.strip():
             vcard.add('title')
-            vcard.title.value = contact_data['title']
+            vcard.title.value = title.strip()
         
         # Email
-        if contact_data.get('email'):
+        email_val = contact_data.get('email')
+        if email_val and email_val.strip():
             email = vcard.add('email')
-            email.value = contact_data['email']
+            email.value = email_val.strip()
             email.type_param = 'INTERNET'
         
         # Phone numbers
-        if contact_data.get('phone'):
+        phone_val = contact_data.get('phone')
+        if phone_val and phone_val.strip():
             tel = vcard.add('tel')
-            tel.value = contact_data['phone']
+            tel.value = phone_val.strip()
             tel.type_param = ['WORK', 'VOICE']
         
-        if contact_data.get('mobile'):
+        mobile_val = contact_data.get('mobile')
+        if mobile_val and mobile_val.strip():
             mobile = vcard.add('tel')
-            mobile.value = contact_data['mobile']
+            mobile.value = mobile_val.strip()
             mobile.type_param = ['CELL', 'VOICE']
         
         # Address
-        if any(contact_data.get(field) for field in ['address', 'city', 'state', 'zip', 'country']):
+        address_fields = {
+            'address': contact_data.get('address', '') or '',
+            'city': contact_data.get('city', '') or '',
+            'state': contact_data.get('state', '') or '',
+            'zip': contact_data.get('zip', '') or '',
+            'country': contact_data.get('country', '') or ''
+        }
+        
+        if any(v.strip() for v in address_fields.values()):
             adr = vcard.add('adr')
             adr.type_param = 'WORK'
             adr.value = vobject.vcard.Address(
-                street=contact_data.get('address', ''),
-                city=contact_data.get('city', ''),
-                region=contact_data.get('state', ''),
-                code=contact_data.get('zip', ''),
-                country=contact_data.get('country', '')
+                street=address_fields['address'],
+                city=address_fields['city'],
+                region=address_fields['state'],
+                code=address_fields['zip'],
+                country=address_fields['country']
             )
         
         # Website
-        if contact_data.get('website'):
+        website_val = contact_data.get('website')
+        if website_val and website_val.strip():
             url = vcard.add('url')
-            url.value = contact_data['website']
+            url.value = website_val.strip()
             url.type_param = 'WORK'
         
         # LinkedIn (as another URL)
-        if contact_data.get('linkedin'):
+        linkedin_val = contact_data.get('linkedin')
+        if linkedin_val and linkedin_val.strip():
             url = vcard.add('url')
-            url.value = contact_data['linkedin']
+            url.value = linkedin_val.strip()
             url.type_param = 'LinkedIn'
         
         # Notes
-        if contact_data.get('notes'):
+        notes_val = contact_data.get('notes')
+        if notes_val and notes_val.strip():
             note = vcard.add('note')
-            note.value = contact_data['notes']
+            note.value = notes_val.strip()
         
         # Add revision timestamp
         vcard.add('rev')
