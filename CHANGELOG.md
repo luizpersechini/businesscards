@@ -6,7 +6,7 @@ All notable changes to the Business Card Scanner project will be documented in t
 
 ### 🎯 Major Feature: Vision Mode
 
-#### Added
+#### Added (Latest Updates)
 - **Vision Processor Module** (`utils/vision_processor.py`)
   - Direct image analysis using Ollama vision models
   - Supports: llama3.2-vision, llava, llava:13b, bakllava
@@ -27,11 +27,19 @@ All notable changes to the Business Card Scanner project will be documented in t
   - Detection method indicator (shows which library found the code)
   - More reliable detection overall
 
+#### Fixed (Bug Fixes)
+- **PNG Encoding**: Switched from JPEG to PNG for better reliability (fixes "0xff00 sequence" errors)
+- **VCF Generation**: Added `_sanitize_contact_data()` to handle None/null values from vision model
+- **QR Fallback**: Auto-uses QR code data when vision processing times out or fails
+- **Image Validation**: Comprehensive checks for empty, corrupted, or malformed images
+- **Memory Handling**: Fixed non-contiguous array issues and multi-format support
+
 #### Changed
 - QR detection now always attempts to read codes (no more "disabled" state)
 - Sidebar UI adapts based on processing mode selected
 - Better error messages with actionable suggestions
 - App initialization handles missing models gracefully
+- Timeout errors now gracefully fallback to QR data if available
 
 #### Benefits of Vision Mode
 - ✅ No more OCR errors on rotated/skewed text
