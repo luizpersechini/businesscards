@@ -2,6 +2,52 @@
 
 All notable changes to the Business Card Scanner project will be documented in this file.
 
+## [1.1.0] - 2025-10-31 (improvements branch)
+
+### 🎯 Major Feature: Vision Mode
+
+#### Added
+- **Vision Processor Module** (`utils/vision_processor.py`)
+  - Direct image analysis using Ollama vision models
+  - Supports: llama3.2-vision, llava, llava:13b, bakllava
+  - Base64 image encoding and API integration
+  - Intelligent JSON parsing with multiple fallback methods
+  - Timeout handling (90s default)
+  - Better accuracy than OCR for complex layouts
+
+- **Processing Mode Toggle**
+  - "Vision (Recommended)" - Direct image analysis
+  - "OCR + LLM" - Traditional pipeline (backward compatible)
+  - Dynamic UI that shows relevant options per mode
+
+- **Improved QR Code Detection**
+  - OpenCV QR detector as fallback when pyzbar unavailable
+  - Dual detection methods (pyzbar + OpenCV)
+  - Multiple preprocessing attempts for difficult QR codes
+  - Detection method indicator (shows which library found the code)
+  - More reliable detection overall
+
+#### Changed
+- QR detection now always attempts to read codes (no more "disabled" state)
+- Sidebar UI adapts based on processing mode selected
+- Better error messages with actionable suggestions
+- App initialization handles missing models gracefully
+
+#### Benefits of Vision Mode
+- ✅ No more OCR errors on rotated/skewed text
+- ✅ Better handling of complex card layouts
+- ✅ Understands context better than OCR + text parsing
+- ✅ Reduces processing steps (no OCR needed)
+- ✅ More accurate for handwritten notes
+- ✅ Better multi-language support (vision models handle any language)
+
+#### Trade-offs
+- ⚠️ Slower: 30-60s per card vs 5-10s for OCR mode
+- ⚠️ Higher memory usage (~4-8GB VRAM recommended)
+- ⚠️ Requires vision model: `ollama pull llama3.2-vision`
+
+---
+
 ## [1.0.0] - 2025-10-31
 
 ### 🎉 Initial Release
@@ -59,11 +105,4 @@ All notable changes to the Business Card Scanner project will be documented in t
 
 ## Future Versions
 
-See the `improvements` branch for planned enhancements:
-- Automatic margin detection
-- Contact editing interface
-- CSV/Excel export
-- Duplicate detection
-- Contact merging
-- Cloud storage integration
-
+See the `improvements` branch for ongoing enhancements and the `IMPROVEMENTS.md` file for the roadmap.

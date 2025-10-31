@@ -22,6 +22,7 @@ from utils.improved_card_detector import ImprovedCardDetector
 from utils.ocr_processor import OCRProcessor
 from utils.qr_reader import QRReader
 from utils.llm_processor import LLMProcessor
+from utils.vision_processor import VisionProcessor
 from utils.vcf_generator import VCFGenerator
 
 
@@ -203,33 +204,50 @@ def split_image_grid(image: np.ndarray, rows: int, cols: int,
     return cards
 
 
-def process_business_cards(uploaded_files, use_llm, ollama_model, ocr_languages, detection_mode, grid_rows, grid_cols, min_percent, max_percent, margin_top, margin_bottom, margin_left, margin_right):
+def process_business_cards(uploaded_files, processing_mode, vision_model, use_llm, ollama_model, ocr_languages, detection_mode, grid_rows, grid_cols, min_percent, max_percent, margin_top, margin_bottom, margin_left, margin_right):
     """
     Main processing pipeline for business cards.
     
     Args:
         uploaded_files: List of uploaded image files
-        use_llm: Whether to use LLM for processing
-        ollama_model: Ollama model name
+        processing_mode: "Vision (Recommended)" or "OCR + LLM"
+        vision_model: Vision model name (for vision mode)
+        use_llm: Whether to use LLM for processing (OCR mode)
+        ollama_model: Ollama model name (OCR mode)
         ocr_languages: List of language codes for OCR
         detection_mode: Detection mode (Automatic/Manual)
         grid_rows: Number of rows for grid layout
         grid_cols: Number of columns for grid layout
         min_percent: Minimum card size percentage
         max_percent: Maximum card size percentage
+        margin_top/bottom/left/right: Margins for grid layout
     """
     # Initialize processors
     card_detector = CardDetector()
     improved_detector = ImprovedCardDetector(min_area_percent=min_percent, max_area_percent=max_percent)
-    ocr_processor = OCRProcessor(languages=ocr_languages, gpu=False)
     qr_reader = QRReader()
-    llm_processor = LLMProcessor(model=ollama_model) if use_llm else None
     vcf_generator = VCFGenerator()
+    
+    # Initialize mode-specific processors
+    if processing_mode == "Vision (Recommended)":
+        vision_processor = VisionProcessor(model=vision_model)
+        ocr_processor = None
+        llm_processor = None
+    else:
+        vision_processor = None
+        ocr_processor = OCRProcessor(languages=ocr_languages, gpu=False)
+        llm_processor = LLMProcessor(model=ollama_model) if use_llm else None
     
     # Check Ollama status
     ollama_status = "Not used"
-    if use_llm:
-        if llm_processor.is_ollama_running():
+    if processing_mode == "Vision (Recommended)":
+        if vision_processor.check_ollama_status():
+            ollama_status = f"✅ Connected ({vision_model})"
+        else:
+            ollama_status = "⚠️ Not running or model not available"
+            st.error(f"Vision model '{vision_model}' not available. Install with: ollama pull {vision_model}")
+    elif use_llm:
+        if llm_processor and llm_processor.is_ollama_running():
             ollama_status = "✅ Connected"
         else:
             ollama_status = "⚠️ Not running (using fallback)"
@@ -288,37 +306,24 @@ def process_business_cards(uploaded_files, use_llm, ollama_model, ocr_languages,
                 st.image(card_rgb, use_column_width=True)
             
             with card_col2:
-                # Step 2: OCR Processing
-                with st.spinner("📝 Extracting text with OCR..."):
-                    ocr_results = ocr_processor.extract_with_preprocessing(card_image)
-                    raw_text = ocr_results['raw_text']
-                    
-                    st.markdown("**Extracted Text:**")
-                    st.text_area(
-                        "OCR Text",
-                        raw_text,
-                        height=150,
-                        key=f"ocr_{file_idx}_{card_idx}",
-                        label_visibility="collapsed"
-                    )
+                qr_data = None
+                contact_data = {}
                 
-                # Step 3: QR Code Detection - ALWAYS TRY
+                # Step 2: QR Code Detection - ALWAYS TRY FIRST
                 with st.spinner("📱 Checking for QR codes..."):
-                    qr_data = None
-                    
                     try:
-                        # FORCE QR CODE ATTEMPT
                         qr_results = qr_reader.detect_and_decode(card_image)
                         
                         if qr_results:
                             st.success(f"✅ Found {len(qr_results)} QR code(s)")
+                            method_used = qr_results[0].get('method', 'unknown')
+                            st.caption(f"Detection method: {method_used}")
                             qr_data = qr_reader.extract_contact_info(qr_results)
                             
                             with st.expander("View QR Code Data"):
                                 for qr in qr_results:
                                     st.json(qr['parsed'])
                             
-                            # Show what was extracted from QR
                             if qr_data:
                                 st.info(f"📱 QR code provided: {', '.join(qr_data.keys())}")
                         else:
@@ -329,17 +334,46 @@ def process_business_cards(uploaded_files, use_llm, ollama_model, ocr_languages,
                         st.info("💡 Restart app with: ./start_app.sh")
                     except Exception as e:
                         st.warning(f"⚠️ QR scan error: {str(e)}")
-            
-            # Step 4: LLM Processing
-            st.markdown("**🤖 Processing Contact Information**")
-            
-            with st.spinner("Structuring contact data..."):
-                if use_llm and llm_processor.is_ollama_running():
-                    contact_data = llm_processor.extract_contact_info(raw_text, qr_data)
-                else:
-                    contact_data = llm_processor._fallback_extraction(raw_text, qr_data) if llm_processor else {}
                 
-                if not contact_data:
+                # Step 3: Extract contact information (Vision or OCR mode)
+                if processing_mode == "Vision (Recommended)":
+                    st.markdown("**👁️ Vision Analysis**")
+                    with st.spinner("🤖 Analyzing card image with vision model..."):
+                        contact_data = vision_processor.extract_contact_from_image(
+                            card_image, qr_data, timeout=90
+                        )
+                        
+                        if 'error' in contact_data:
+                            st.error(f"❌ Vision processing error: {contact_data.get('message', 'Unknown')}")
+                            st.info(f"💡 Make sure vision model is running: ollama pull {vision_model}")
+                            continue
+                        else:
+                            st.success("✅ Vision analysis complete!")
+                
+                else:  # OCR + LLM mode
+                    # OCR Processing
+                    with st.spinner("📝 Extracting text with OCR..."):
+                        ocr_results = ocr_processor.extract_with_preprocessing(card_image)
+                        raw_text = ocr_results['raw_text']
+                        
+                        st.markdown("**Extracted Text:**")
+                        st.text_area(
+                            "OCR Text",
+                            raw_text,
+                            height=150,
+                            key=f"ocr_{file_idx}_{card_idx}",
+                            label_visibility="collapsed"
+                        )
+                    
+                    # LLM Processing
+                    st.markdown("**🤖 Processing Contact Information**")
+                    with st.spinner("Structuring contact data..."):
+                        if use_llm and llm_processor and llm_processor.is_ollama_running():
+                            contact_data = llm_processor.extract_contact_info(raw_text, qr_data)
+                        else:
+                            contact_data = llm_processor._fallback_extraction(raw_text, qr_data) if llm_processor else {}
+                
+                if not contact_data or 'error' in contact_data:
                     st.warning("⚠️ Could not extract contact information")
                     continue
             
@@ -402,37 +436,62 @@ def main():
     # Sidebar configuration
     st.sidebar.title("⚙️ Configuration")
     
+    # Processing Mode
+    st.sidebar.markdown("### 🔬 Processing Mode")
+    processing_mode = st.sidebar.radio(
+        "Extraction Method",
+        ["Vision (Recommended)", "OCR + LLM"],
+        help="Vision: Direct image analysis with vision LLM | OCR: Traditional text extraction + parsing"
+    )
+    
     # LLM Settings
     st.sidebar.markdown("### LLM Settings")
-    use_llm = st.sidebar.checkbox("Use Ollama LLM", value=True, 
-                                   help="Use local LLM for better extraction (requires Ollama)")
     
-    ollama_model = st.sidebar.selectbox(
-        "Ollama Model",
-        ["llama3.2", "llama3.1", "llama3", "mistral", "phi3"],
-        help="Select the Ollama model to use"
-    )
+    if processing_mode == "Vision (Recommended)":
+        vision_model = st.sidebar.selectbox(
+            "Vision Model",
+            ["llama3.2-vision", "llava", "llava:13b", "bakllava"],
+            help="Select the Ollama vision model (must support images)"
+        )
+        st.sidebar.info("🎯 Vision models analyze images directly - more accurate!")
+        # Set defaults for OCR mode variables (not used in vision mode)
+        use_llm = False
+        ollama_model = "llama3.2"
+    else:
+        # Set default for vision mode variable (not used in OCR mode)
+        vision_model = "llama3.2-vision"
+        use_llm = st.sidebar.checkbox("Use Ollama LLM", value=True, 
+                                       help="Use local LLM for better extraction (requires Ollama)")
+        
+        ollama_model = st.sidebar.selectbox(
+            "Ollama Model",
+            ["llama3.2", "llama3.1", "llama3", "mistral", "phi3"],
+            help="Select the Ollama model to use"
+        )
     
-    # OCR Settings
-    st.sidebar.markdown("### OCR Settings")
-    ocr_languages = st.sidebar.multiselect(
-        "OCR Languages",
-        options=['en', 'pt', 'es', 'fr', 'de', 'it'],
-        default=['en', 'pt'],
-        help="Select languages for text recognition"
-    )
-    
-    language_names = {
-        'en': 'English',
-        'pt': 'Portuguese',
-        'es': 'Spanish', 
-        'fr': 'French',
-        'de': 'German',
-        'it': 'Italian'
-    }
-    
-    selected_lang_names = [language_names.get(lang, lang) for lang in ocr_languages]
-    st.sidebar.info(f"Languages: {', '.join(selected_lang_names)}")
+    # OCR Settings (only for OCR mode)
+    if processing_mode == "OCR + LLM":
+        st.sidebar.markdown("### OCR Settings")
+        ocr_languages = st.sidebar.multiselect(
+            "OCR Languages",
+            options=['en', 'pt', 'es', 'fr', 'de', 'it'],
+            default=['en', 'pt'],
+            help="Select languages for text recognition"
+        )
+        
+        language_names = {
+            'en': 'English',
+            'pt': 'Portuguese',
+            'es': 'Spanish', 
+            'fr': 'French',
+            'de': 'German',
+            'it': 'Italian'
+        }
+        
+        selected_lang_names = [language_names.get(lang, lang) for lang in ocr_languages]
+        st.sidebar.info(f"Languages: {', '.join(selected_lang_names)}")
+    else:
+        ocr_languages = ['en', 'pt']  # Default for vision mode (not really used)
     
     # Card Detection Settings
     st.sidebar.markdown("### Detection Settings")
@@ -528,8 +587,13 @@ def main():
         # Process button
         if st.button("🚀 Process Business Cards", type="primary"):
             with st.spinner("Processing..."):
+                # Set defaults for parameters based on mode
+                _use_llm = use_llm if processing_mode == "OCR + LLM" else False
+                _ollama_model = ollama_model if processing_mode == "OCR + LLM" else "llama3.2"
+                _vision_model = vision_model if processing_mode == "Vision (Recommended)" else "llama3.2-vision"
+                
                 processed_cards = process_business_cards(
-                    uploaded_files, use_llm, ollama_model, ocr_languages,
+                    uploaded_files, processing_mode, _vision_model, _use_llm, _ollama_model, ocr_languages,
                     detection_mode, manual_grid_rows, manual_grid_cols,
                     min_card_percent, max_card_percent,
                     margin_top, margin_bottom, margin_left, margin_right

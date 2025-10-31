@@ -31,14 +31,27 @@ except Exception as e:
 class QRReader:
     """Detects and reads QR codes from images."""
     
-    def __init__(self):
-        """Initialize the QR reader."""
-        pass
+    def __init__(self, use_opencv_fallback: bool = True):
+        """
+        Initialize the QR reader.
+        
+        Args:
+            use_opencv_fallback: Use OpenCV QR detector if pyzbar fails
+        """
+        self.use_opencv_fallback = use_opencv_fallback
+        self.opencv_detector = None
+        
+        if self.use_opencv_fallback:
+            try:
+                self.opencv_detector = cv2.QRCodeDetector()
+                print("✓ OpenCV QR detector initialized as fallback")
+            except:
+                print("⚠ OpenCV QR detector not available")
     
     def detect_and_decode(self, image: np.ndarray) -> List[Dict]:
         """
         Detect and decode all QR codes in an image.
-        ALWAYS ATTEMPTS - will raise exception if library not available.
+        Uses pyzbar first, falls back to OpenCV if available.
         
         Args:
             image: Input image as numpy array (BGR format)
@@ -51,10 +64,34 @@ class QRReader:
                 - 'polygon': Polygon points
                 - 'parsed': Parsed data if it's a vCard or URL
         """
-        # Force attempt - raise error if not available
-        if not PYZBAR_AVAILABLE:
+        results = []
+        
+        # Try pyzbar first (better detection)
+        if PYZBAR_AVAILABLE:
+            try:
+                results = self._detect_with_pyzbar(image)
+                if results:
+                    return results
+            except Exception as e:
+                print(f"⚠ pyzbar detection failed: {e}")
+        
+        # Fall back to OpenCV if enabled and pyzbar didn't find anything
+        if self.use_opencv_fallback and self.opencv_detector is not None:
+            try:
+                results = self._detect_with_opencv(image)
+                if results:
+                    return results
+            except Exception as e:
+                print(f"⚠ OpenCV QR detection failed: {e}")
+        
+        # If pyzbar is not available and no fallback, raise error
+        if not PYZBAR_AVAILABLE and not (self.use_opencv_fallback and self.opencv_detector):
             raise RuntimeError(f"QR code library not available: {PYZBAR_ERROR}. Install: brew install zbar")
         
+        return results
+    
+    def _detect_with_pyzbar(self, image: np.ndarray) -> List[Dict]:
+        """Detect QR codes using pyzbar library."""
         # Convert to grayscale for better detection
         if len(image.shape) == 3:
             gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
@@ -81,8 +118,80 @@ class QRReader:
                 'type': code.type,
                 'rect': (rect.left, rect.top, rect.width, rect.height),
                 'polygon': [(point.x, point.y) for point in polygon],
-                'parsed': parsed_data
+                'parsed': parsed_data,
+                'method': 'pyzbar'
             })
+        
+        return results
+    
+    def _detect_with_opencv(self, image: np.ndarray) -> List[Dict]:
+        """Detect QR codes using OpenCV's built-in detector."""
+        if len(image.shape) == 3:
+            gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+        else:
+            gray = image
+        
+        results = []
+        
+        # Try multiple preprocessing approaches
+        images_to_try = [
+            gray,
+            self.enhance_for_qr_detection(image)
+        ]
+        
+        for img in images_to_try:
+            try:
+                # detectAndDecode for single QR code
+                data, bbox, _ = self.opencv_detector.detectAndDecode(img)
+                
+                if data and bbox is not None:
+                    # Convert bbox to integer coordinates
+                    bbox = bbox.astype(int)
+                    
+                    # Get bounding rectangle
+                    x, y, w, h = cv2.boundingRect(bbox)
+                    
+                    # Parse the data
+                    parsed_data = self._parse_qr_data(data)
+                    
+                    results.append({
+                        'data': data,
+                        'type': 'QRCODE',
+                        'rect': (x, y, w, h),
+                        'polygon': [(int(p[0]), int(p[1])) for p in bbox[0]],
+                        'parsed': parsed_data,
+                        'method': 'opencv'
+                    })
+                    
+                    # Found one, return it
+                    break
+                    
+            except Exception as e:
+                continue
+        
+        # Try detectMulti for multiple QR codes (if available)
+        if not results:
+            try:
+                retval, decoded_info, points, _ = self.opencv_detector.detectAndDecodeMulti(gray)
+                
+                if retval and decoded_info:
+                    for i, data in enumerate(decoded_info):
+                        if data and points is not None and len(points) > i:
+                            bbox = points[i].astype(int)
+                            x, y, w, h = cv2.boundingRect(bbox)
+                            
+                            parsed_data = self._parse_qr_data(data)
+                            
+                            results.append({
+                                'data': data,
+                                'type': 'QRCODE',
+                                'rect': (x, y, w, h),
+                                'polygon': [(int(p[0]), int(p[1])) for p in bbox],
+                                'parsed': parsed_data,
+                                'method': 'opencv_multi'
+                            })
+            except:
+                pass
         
         return results
     

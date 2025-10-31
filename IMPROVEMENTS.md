@@ -2,14 +2,53 @@
 
 This branch is dedicated to future enhancements and experimental features.
 
+## ✅ Completed Improvements
+
+### Vision Mode (v1.1.0) ⭐
+**Completed**: October 31, 2025
+
+Major enhancement replacing traditional OCR pipeline with direct vision model analysis:
+
+- ✅ **Vision Processor**: New module that sends card images directly to Ollama vision models
+  - Supports: `llama3.2-vision`, `llava`, `bakllava`, and other vision-capable models
+  - Base64 image encoding and API integration
+  - Intelligent JSON parsing with fallback methods
+  - Timeout handling and error recovery
+
+- ✅ **Processing Mode Toggle**: Users can choose between two modes:
+  - **Vision Mode (Recommended)**: Direct image analysis - more accurate for complex layouts
+  - **OCR + LLM Mode**: Traditional pipeline for cases where vision models aren't available
+
+- ✅ **Improved QR Detection**: 
+  - OpenCV QR detector as fallback when pyzbar/zbar unavailable
+  - Dual detection methods (pyzbar + OpenCV) for better reliability
+  - Multiple preprocessing attempts for difficult QR codes
+  - Detection method indicator (shows which method found the QR code)
+
+**Benefits**:
+- No more OCR errors on rotated or skewed text
+- Better handling of complex card layouts
+- Understands context better than OCR + text parsing
+- Reduces processing steps (no OCR needed)
+- More accurate extraction for handwritten notes
+- Better language support (vision models handle any language)
+
+**Requirements**:
+- Vision model must be installed: `ollama pull llama3.2-vision`
+- Longer processing time per card (30-60s vs 5-10s for OCR)
+- Higher memory usage
+
+---
+
 ## 🎯 Planned Improvements
 
 ### High Priority
 - [ ] **Automatic Margin Detection**: Intelligent detection of card boundaries in grid layouts
 - [ ] **Contact Data Editor**: Interface to review and edit extracted contact information before VCF generation
-- [ ] **Better QR Integration**: Automatic fallback when zbar library is missing
-- [ ] **Performance Optimization**: Faster processing for large batches
+- [x] **Better QR Integration**: ✅ Added OpenCV fallback when zbar unavailable (v1.1.0)
+- [ ] **Performance Optimization**: Faster processing for large batches (batch vision API calls)
 - [ ] **Mobile Responsive Design**: Better experience on tablets and phones
+- [ ] **Vision Model Benchmarking**: Compare accuracy across different vision models
 
 ### Medium Priority
 - [ ] **Export Formats**: 
@@ -35,29 +74,35 @@ This branch is dedicated to future enhancements and experimental features.
 - [ ] **Contact Search**: Search through previously processed contacts
 
 ### Experimental
-- [ ] **AI Model Options**: Support for different LLM backends (OpenAI, Anthropic, etc.)
-- [ ] **OCR Model Selection**: Let users choose different OCR models
+- [x] **AI Model Options**: ✅ Support for vision models (llama3.2-vision, llava, bakllava) (v1.1.0)
+- [ ] **Cloud AI APIs**: Support for OpenAI Vision, Anthropic Claude Vision, Google Gemini
+- [ ] **OCR Model Selection**: Let users choose different OCR models (PaddleOCR, Tesseract)
 - [ ] **Batch Learning**: Learn from user corrections to improve extraction
 - [ ] **Template Recognition**: Detect card templates and use template-specific extraction
 - [ ] **Business Card Design Tool**: Generate business cards from contact info
+- [ ] **Confidence Scores**: Show confidence levels for extracted fields
 
-## 🐛 Known Issues to Fix
+## 🐛 Known Issues
 
 ### QR Code Reading
-- Current: Requires `DYLD_LIBRARY_PATH` setup and `start_app.sh`
-- Goal: Automatic library detection or better error handling
+- Status: ✅ IMPROVED (v1.1.0)
+- Solution: OpenCV fallback added, works without zbar in most cases
+- Remaining: pyzbar still gives better detection, recommended to use `start_app.sh`
 
 ### Grid Layout
 - Current: Manual margin adjustment needed
 - Goal: Automatic edge detection and card spacing calculation
 
-### LLM Processing
-- Current: Quality varies by model
-- Goal: Prompt optimization for specific models, fallback strategies
+### Vision Mode Processing
+- Current: Slow for large batches (60s per card)
+- Goal: Batch API calls, parallel processing
+- Current: JSON parsing sometimes fails if model doesn't follow instructions
+- Goal: Better prompt engineering, retry logic
 
 ### Detection Accuracy
 - Current: Some card layouts cause false positives/negatives
 - Goal: Machine learning-based card detection
+- Note: Vision mode helps by not relying on perfect card detection
 
 ## 💡 Ideas & Suggestions
 
