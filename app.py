@@ -156,7 +156,65 @@ def draw_grid_overlay(image: np.ndarray, rows: int, cols: int,
     return overlay
 
 
-def split_image_grid(image: np.ndarray, rows: int, cols: int, 
+def qr_to_contact_data(qr_data: dict) -> dict:
+    """
+    Convert QR code data to contact data format.
+    
+    Args:
+        qr_data: QR code extracted data
+        
+    Returns:
+        Contact data dictionary
+    """
+    contact = {}
+    
+    # Extract from vCard format if present
+    if 'full_name' in qr_data:
+        contact['fullName'] = qr_data['full_name']
+    if 'first_name' in qr_data:
+        contact['firstName'] = qr_data['first_name']
+    if 'last_name' in qr_data:
+        contact['lastName'] = qr_data['last_name']
+    if 'organization' in qr_data:
+        contact['company'] = qr_data['organization']
+    if 'title' in qr_data:
+        contact['title'] = qr_data['title']
+    
+    # Handle emails (can be list)
+    if 'emails' in qr_data and qr_data['emails']:
+        if isinstance(qr_data['emails'], list):
+            contact['email'] = qr_data['emails'][0]
+        else:
+            contact['email'] = qr_data['emails']
+    
+    # Handle phones (can be list)
+    if 'phones' in qr_data and qr_data['phones']:
+        if isinstance(qr_data['phones'], list):
+            contact['phone'] = qr_data['phones'][0]
+            if len(qr_data['phones']) > 1:
+                contact['mobile'] = qr_data['phones'][1]
+        else:
+            contact['phone'] = qr_data['phones']
+    
+    # URL
+    if 'url' in qr_data:
+        contact['website'] = qr_data['url']
+    
+    # Address (usually semicolon separated in vCard)
+    if 'address' in qr_data:
+        addr = qr_data['address']
+        if isinstance(addr, str):
+            contact['address'] = addr.replace(', ', '\n')
+        else:
+            contact['address'] = str(addr)
+    
+    # Add note if QR data was used
+    contact['notes'] = 'Contact extracted from QR code'
+    
+    return contact
+
+
+def split_image_grid(image: np.ndarray, rows: int, cols: int,
                      margin_top: int = 0, margin_bottom: int = 0,
                      margin_left: int = 0, margin_right: int = 0) -> List[Tuple[np.ndarray, None]]:
     """
@@ -344,9 +402,17 @@ def process_business_cards(uploaded_files, processing_mode, vision_model, use_ll
                         )
                         
                         if 'error' in contact_data:
-                            st.error(f"❌ Vision processing error: {contact_data.get('message', 'Unknown')}")
-                            st.info(f"💡 Make sure vision model is running: ollama pull {vision_model}")
-                            continue
+                            error_msg = contact_data.get('message', 'Unknown')
+                            st.error(f"❌ Vision processing error: {error_msg}")
+                            
+                            # Try to use QR code data as fallback
+                            if qr_data:
+                                st.warning("⚠️ Using QR code data as fallback...")
+                                contact_data = qr_to_contact_data(qr_data)
+                                st.success("✅ Contact info extracted from QR code!")
+                            else:
+                                st.info(f"💡 No QR code found. Try OCR mode or ensure vision model is available: ollama pull {vision_model}")
+                                continue
                         else:
                             st.success("✅ Vision analysis complete!")
                 
