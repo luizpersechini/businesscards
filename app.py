@@ -262,7 +262,7 @@ def split_image_grid(image: np.ndarray, rows: int, cols: int,
     return cards
 
 
-def process_business_cards(uploaded_files, processing_mode, vision_model, use_llm, ollama_model, ocr_languages, detection_mode, grid_rows, grid_cols, min_percent, max_percent, margin_top, margin_bottom, margin_left, margin_right):
+def process_business_cards(uploaded_files, processing_mode, vision_model, vision_timeout, use_llm, ollama_model, ocr_languages, detection_mode, grid_rows, grid_cols, min_percent, max_percent, margin_top, margin_bottom, margin_left, margin_right):
     """
     Main processing pipeline for business cards.
     
@@ -396,9 +396,9 @@ def process_business_cards(uploaded_files, processing_mode, vision_model, use_ll
                 # Step 3: Extract contact information (Vision or OCR mode)
                 if processing_mode == "Vision (Recommended)":
                     st.markdown("**👁️ Vision Analysis**")
-                    with st.spinner("🤖 Analyzing card image with vision model..."):
+                    with st.spinner(f"🤖 Analyzing card image with vision model (timeout: {vision_timeout}s)..."):
                         contact_data = vision_processor.extract_contact_from_image(
-                            card_image, qr_data, timeout=90
+                            card_image, qr_data, timeout=vision_timeout
                         )
                         
                         if 'error' in contact_data:
@@ -519,13 +519,25 @@ def main():
             ["llama3.2-vision", "llava", "llava:13b", "bakllava"],
             help="Select the Ollama vision model (must support images)"
         )
+        
+        vision_timeout = st.sidebar.slider(
+            "Vision Timeout (seconds)",
+            min_value=60,
+            max_value=300,
+            value=180,
+            step=30,
+            help="Time to wait for vision model response. Increase for slower systems or complex cards."
+        )
+        
         st.sidebar.info("🎯 Vision models analyze images directly - more accurate!")
+        st.sidebar.caption(f"⏱️ Current timeout: {vision_timeout}s (~{vision_timeout//60} min)")
         # Set defaults for OCR mode variables (not used in vision mode)
         use_llm = False
         ollama_model = "llama3.2"
     else:
-        # Set default for vision mode variable (not used in OCR mode)
+        # Set defaults for vision mode variables (not used in OCR mode)
         vision_model = "llama3.2-vision"
+        vision_timeout = 180
         use_llm = st.sidebar.checkbox("Use Ollama LLM", value=True, 
                                        help="Use local LLM for better extraction (requires Ollama)")
         
@@ -657,9 +669,10 @@ def main():
                 _use_llm = use_llm if processing_mode == "OCR + LLM" else False
                 _ollama_model = ollama_model if processing_mode == "OCR + LLM" else "llama3.2"
                 _vision_model = vision_model if processing_mode == "Vision (Recommended)" else "llama3.2-vision"
+                _vision_timeout = vision_timeout if processing_mode == "Vision (Recommended)" else 180
                 
                 processed_cards = process_business_cards(
-                    uploaded_files, processing_mode, _vision_model, _use_llm, _ollama_model, ocr_languages,
+                    uploaded_files, processing_mode, _vision_model, _vision_timeout, _use_llm, _ollama_model, ocr_languages,
                     detection_mode, manual_grid_rows, manual_grid_cols,
                     min_card_percent, max_card_percent,
                     margin_top, margin_bottom, margin_left, margin_right
