@@ -49,10 +49,22 @@ All notable changes to the Business Card Scanner project will be documented in t
 - ✅ More accurate for handwritten notes
 - ✅ Better multi-language support (vision models handle any language)
 
+#### Configuration
+- **Configurable Timeout**: 60-300 seconds (default: 180s/3 min)
+- Timeout slider in sidebar for user customization
+- Visible timeout feedback in processing spinner
+
 #### Trade-offs
 - ⚠️ Slower: 30-60s per card vs 5-10s for OCR mode
 - ⚠️ Higher memory usage (~4-8GB VRAM recommended)
 - ⚠️ Requires vision model: `ollama pull llama3.2-vision`
+
+#### Production Ready
+- ✅ Handles 7+ cards in batch processing
+- ✅ QR code fallback for timeout errors
+- ✅ Robust error handling with graceful degradation
+- ✅ All None/null values sanitized for VCF generation
+- ✅ PNG encoding eliminates image format issues
 
 ---
 
