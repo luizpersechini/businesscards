@@ -82,22 +82,51 @@ class VisionProcessor:
         if pil_image.width > max_size or pil_image.height > max_size:
             pil_image.thumbnail((max_size, max_size), Image.Resampling.LANCZOS)
         
-        # Save to buffer with error handling
+        # Use PNG as default (more reliable than JPEG for vision models)
+        # PNG is lossless and handles all image types better
         buffer = BytesIO()
         try:
-            pil_image.save(buffer, format="JPEG", quality=95, optimize=True)
-        except Exception as e:
-            # Try PNG as fallback
+            # Try PNG first (best compatibility)
+            pil_image.save(buffer, format="PNG", optimize=False)
+            buffer.seek(0)  # Reset buffer position
+            
+            # Verify the image can be read back
+            test_img = Image.open(buffer)
+            test_img.verify()
+            
+            # Reset buffer for actual use
+            buffer.seek(0)
+            img_bytes = buffer.getvalue()
+            
+        except Exception as png_error:
+            # Fallback to JPEG if PNG fails (rare)
             buffer = BytesIO()
-            pil_image.save(buffer, format="PNG", optimize=True)
+            try:
+                # Convert RGBA to RGB if needed (JPEG doesn't support alpha)
+                if pil_image.mode == 'RGBA':
+                    rgb_image = Image.new('RGB', pil_image.size, (255, 255, 255))
+                    rgb_image.paste(pil_image, mask=pil_image.split()[3])
+                    pil_image = rgb_image
+                
+                pil_image.save(buffer, format="JPEG", quality=95, optimize=False, subsampling=0)
+                buffer.seek(0)
+                img_bytes = buffer.getvalue()
+                
+            except Exception as jpeg_error:
+                raise ValueError(f"Failed to encode image as PNG or JPEG. PNG error: {png_error}, JPEG error: {jpeg_error}")
         
         # Validate buffer
-        img_bytes = buffer.getvalue()
         if len(img_bytes) == 0:
             raise ValueError("Failed to encode image: empty buffer")
         
         # Encode to base64
-        return base64.b64encode(img_bytes).decode('utf-8')
+        b64_string = base64.b64encode(img_bytes).decode('utf-8')
+        
+        # Validate base64 string
+        if len(b64_string) == 0:
+            raise ValueError("Base64 encoding resulted in empty string")
+        
+        return b64_string
     
     def _build_vision_prompt(self, qr_data: Optional[Dict] = None) -> str:
         """
@@ -192,13 +221,27 @@ Return ONLY the JSON object, starting with { and ending with }. No markdown code
                     "message": "Card image is None"
                 }
             
+            # Check image dimensions
+            if card_image.size == 0:
+                return {
+                    "error": "Invalid input",
+                    "message": "Card image is empty (size=0)"
+                }
+            
+            # Check minimum size
+            if len(card_image.shape) < 2 or card_image.shape[0] < 10 or card_image.shape[1] < 10:
+                return {
+                    "error": "Invalid input",
+                    "message": f"Card image too small: {card_image.shape}"
+                }
+            
             # Convert image to base64
             try:
                 image_b64 = self._image_to_base64(card_image)
             except Exception as e:
                 return {
                     "error": "Image encoding failed",
-                    "message": f"Could not convert image to JPEG/PNG: {str(e)}"
+                    "message": f"Could not convert image to PNG/JPEG: {str(e)}. Image shape: {card_image.shape}, dtype: {card_image.dtype}"
                 }
             
             # Build prompt
