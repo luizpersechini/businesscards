@@ -49,18 +49,54 @@ class VisionProcessor:
         Returns:
             Base64 encoded image string
         """
-        # Convert BGR to RGB
-        rgb_image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+        # Validate image
+        if image is None or image.size == 0:
+            raise ValueError("Invalid or empty image")
+        
+        # Ensure image is contiguous in memory
+        if not image.flags['C_CONTIGUOUS']:
+            image = np.ascontiguousarray(image)
+        
+        # Convert BGR to RGB (handle both BGR and grayscale)
+        if len(image.shape) == 2:
+            # Grayscale image
+            rgb_image = cv2.cvtColor(image, cv2.COLOR_GRAY2RGB)
+        elif image.shape[2] == 3:
+            # BGR image
+            rgb_image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+        elif image.shape[2] == 4:
+            # BGRA image
+            rgb_image = cv2.cvtColor(image, cv2.COLOR_BGRA2RGB)
+        else:
+            raise ValueError(f"Unsupported image format with {image.shape[2]} channels")
+        
+        # Ensure proper data type
+        if rgb_image.dtype != np.uint8:
+            rgb_image = rgb_image.astype(np.uint8)
         
         # Convert to PIL Image
         pil_image = Image.fromarray(rgb_image)
         
-        # Save to buffer
+        # Ensure reasonable size (max 4096 on either dimension)
+        max_size = 4096
+        if pil_image.width > max_size or pil_image.height > max_size:
+            pil_image.thumbnail((max_size, max_size), Image.Resampling.LANCZOS)
+        
+        # Save to buffer with error handling
         buffer = BytesIO()
-        pil_image.save(buffer, format="JPEG", quality=95)
+        try:
+            pil_image.save(buffer, format="JPEG", quality=95, optimize=True)
+        except Exception as e:
+            # Try PNG as fallback
+            buffer = BytesIO()
+            pil_image.save(buffer, format="PNG", optimize=True)
+        
+        # Validate buffer
+        img_bytes = buffer.getvalue()
+        if len(img_bytes) == 0:
+            raise ValueError("Failed to encode image: empty buffer")
         
         # Encode to base64
-        img_bytes = buffer.getvalue()
         return base64.b64encode(img_bytes).decode('utf-8')
     
     def _build_vision_prompt(self, qr_data: Optional[Dict] = None) -> str:
@@ -149,8 +185,21 @@ Return ONLY the JSON object, starting with { and ending with }. No markdown code
             Dictionary containing extracted contact information
         """
         try:
+            # Validate input
+            if card_image is None:
+                return {
+                    "error": "Invalid input",
+                    "message": "Card image is None"
+                }
+            
             # Convert image to base64
-            image_b64 = self._image_to_base64(card_image)
+            try:
+                image_b64 = self._image_to_base64(card_image)
+            except Exception as e:
+                return {
+                    "error": "Image encoding failed",
+                    "message": f"Could not convert image to JPEG/PNG: {str(e)}"
+                }
             
             # Build prompt
             prompt = self._build_vision_prompt(qr_data)
