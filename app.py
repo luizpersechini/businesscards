@@ -760,8 +760,9 @@ def main():
                 st.session_state.processed_cards = processed_cards
                 st.session_state.processing_complete = True
         
-        # Handle individual card retry requests
-        if st.session_state.processed_cards:
+        # Download section
+        if st.session_state.processing_complete and st.session_state.processed_cards:
+            # Handle individual card retry requests (moved inside download section)
             for idx in range(len(st.session_state.processed_cards)):
                 if st.session_state.get(f'retry_card_{idx}', False):
                     # Clear the retry flag
@@ -797,9 +798,8 @@ def main():
                             st.error(f"❌ Failed to reprocess card {idx+1}")
                     
                     st.rerun()
-        
-        # Download section
-        if st.session_state.processing_complete and st.session_state.processed_cards:
+            
+            # Download section UI
             st.markdown("## 💾 Download Contacts")
             
             # Initialize export processor
@@ -881,10 +881,9 @@ def main():
                         if st.button("🔄 Retry", key=f"retry_{idx}", 
                                    disabled=retry_disabled,
                                    help="Re-process this card with current settings" if not retry_disabled else "Unlock first to retry"):
-                            # Retry logic will be handled below
-                            if f'retry_card_{idx}' not in st.session_state:
-                                st.session_state[f'retry_card_{idx}'] = True
-                                st.rerun()
+                            # Set retry flag
+                            st.session_state[f'retry_card_{idx}'] = True
+                            st.rerun()
                     
                     # Download buttons
                     with ctrl_col3:
