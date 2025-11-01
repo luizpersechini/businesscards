@@ -263,6 +263,84 @@ def split_image_grid(image: np.ndarray, rows: int, cols: int,
     return cards
 
 
+def process_single_card_retry(card_image_rgb, processing_mode, vision_model, vision_timeout, use_llm, ollama_model, ocr_languages):
+    """
+    Retry processing a single card.
+    
+    Args:
+        card_image_rgb: Card image in RGB format
+        processing_mode: Vision or OCR+LLM
+        vision_model: Ollama vision model name
+        vision_timeout: Timeout for vision processing
+        use_llm: Whether to use LLM for OCR mode
+        ollama_model: Ollama model name for OCR mode
+        ocr_languages: Languages for OCR
+    
+    Returns:
+        Dictionary with reprocessed card data or None if failed
+    """
+    try:
+        # Convert RGB to BGR for OpenCV
+        card_image = cv2.cvtColor(card_image_rgb, cv2.COLOR_RGB2BGR)
+        
+        # Initialize processors
+        qr_reader = QRReader()
+        vcf_generator = VCFGenerator()
+        
+        if processing_mode == "Vision (Recommended)":
+            vision_processor = VisionProcessor(model=vision_model)
+        else:
+            ocr_processor = OCRProcessor(languages=ocr_languages)
+            llm_processor = LLMProcessor(model=ollama_model) if use_llm else None
+        
+        # QR Code Detection
+        qr_data = None
+        try:
+            qr_results = qr_reader.detect_and_decode(card_image)
+            if qr_results:
+                qr_data = qr_reader.extract_contact_info(qr_results)
+        except Exception as e:
+            st.warning(f"⚠️ QR code reading failed: {str(e)}")
+        
+        # Extract contact information
+        if processing_mode == "Vision (Recommended)":
+            contact_data = vision_processor.extract_contact_from_image(card_image, qr_data, timeout=vision_timeout)
+            
+            if 'error' in contact_data:
+                if qr_data:
+                    st.warning("⚠️ Using QR code data as fallback...")
+                    contact_data = qr_to_contact_data(qr_data)
+                else:
+                    st.error(f"❌ Vision processing error: {contact_data.get('message', 'Unknown')}")
+                    return None
+        else:
+            # OCR mode
+            ocr_results = ocr_processor.extract_with_preprocessing(card_image)
+            raw_text = ocr_results['raw_text']
+            
+            if use_llm and llm_processor and llm_processor.is_ollama_running():
+                contact_data = llm_processor.extract_contact_info(raw_text, qr_data)
+            else:
+                contact_data = llm_processor._fallback_extraction(raw_text, qr_data) if llm_processor else {}
+        
+        if not contact_data or 'error' in contact_data:
+            return None
+        
+        # Generate VCF
+        vcf_string = vcf_generator.generate_vcf_string(contact_data)
+        filename = vcf_generator.contact_to_filename(contact_data)
+        
+        return {
+            'filename': filename,
+            'contact_data': contact_data,
+            'vcf_content': vcf_string
+        }
+    
+    except Exception as e:
+        st.error(f"❌ Retry failed: {str(e)}")
+        return None
+
+
 def process_business_cards(uploaded_files, processing_mode, vision_model, vision_timeout, use_llm, ollama_model, ocr_languages, detection_mode, grid_rows, grid_cols, min_percent, max_percent, margin_top, margin_bottom, margin_left, margin_right):
     """
     Main processing pipeline for business cards.
@@ -483,7 +561,8 @@ def process_business_cards(uploaded_files, processing_mode, vision_model, vision
                 'contact_data': contact_data,
                 'vcf_content': vcf_string,
                 'card_image': card_rgb,
-                'source_file': uploaded_file.name
+                'source_file': uploaded_file.name,
+                'locked': False  # Unlocked by default, user can lock successful ones
             })
             
             st.success("✅ Card processed successfully!")
@@ -681,6 +760,44 @@ def main():
                 st.session_state.processed_cards = processed_cards
                 st.session_state.processing_complete = True
         
+        # Handle individual card retry requests
+        if st.session_state.processed_cards:
+            for idx in range(len(st.session_state.processed_cards)):
+                if st.session_state.get(f'retry_card_{idx}', False):
+                    # Clear the retry flag
+                    st.session_state[f'retry_card_{idx}'] = False
+                    
+                    card = st.session_state.processed_cards[idx]
+                    st.info(f"🔄 Retrying card {idx+1}: {card['filename']}...")
+                    
+                    with st.spinner(f"Re-processing card {idx+1}..."):
+                        # Get current settings from sidebar (they're already in scope)
+                        _use_llm = use_llm if processing_mode == "OCR + LLM" else False
+                        _ollama_model = ollama_model if processing_mode == "OCR + LLM" else "llama3.2"
+                        _vision_model = vision_model if processing_mode == "Vision (Recommended)" else "llama3.2-vision"
+                        _vision_timeout = vision_timeout if processing_mode == "Vision (Recommended)" else 180
+                        
+                        retry_result = process_single_card_retry(
+                            card['card_image'],
+                            processing_mode,
+                            _vision_model,
+                            _vision_timeout,
+                            _use_llm,
+                            _ollama_model,
+                            ocr_languages
+                        )
+                        
+                        if retry_result:
+                            # Update the card with new data
+                            st.session_state.processed_cards[idx]['contact_data'] = retry_result['contact_data']
+                            st.session_state.processed_cards[idx]['vcf_content'] = retry_result['vcf_content']
+                            st.session_state.processed_cards[idx]['filename'] = retry_result['filename']
+                            st.success(f"✅ Card {idx+1} reprocessed successfully!")
+                        else:
+                            st.error(f"❌ Failed to reprocess card {idx+1}")
+                    
+                    st.rerun()
+        
         # Download section
         if st.session_state.processing_complete and st.session_state.processed_cards:
             st.markdown("## 💾 Download Contacts")
@@ -718,17 +835,60 @@ def main():
             download_col1, download_col2 = st.columns(2)
             
             with download_col1:
-                st.markdown("### 📄 Individual Files")
+                st.markdown("### 📄 Individual Cards Management")
+                st.info("💡 **Lock cards with good results** to prevent re-processing. **Retry** failed extractions individually.")
                 
-                # Individual downloads for each contact
+                # Individual card management
                 for idx, card in enumerate(st.session_state.processed_cards):
-                    st.markdown(f"**Contact {idx+1}: {card['filename']}**")
+                    # Card header with lock status
+                    is_locked = card.get('locked', False)
+                    lock_icon = "🔒" if is_locked else "🔓"
+                    status_color = "green" if is_locked else "orange"
                     
-                    col_vcf, col_csv = st.columns(2)
+                    st.markdown(f"**{lock_icon} Contact {idx+1}: {card['filename']}**")
                     
-                    # VCF download
-                    if include_vcf:
-                        with col_vcf:
+                    # Show contact preview
+                    contact = card['contact_data']
+                    name = contact.get('fullName') or f"{contact.get('firstName', '')} {contact.get('lastName', '')}".strip() or "Unknown"
+                    company = contact.get('company', '')
+                    email = contact.get('email', '')
+                    phone = contact.get('phone', '')
+                    
+                    preview_text = f"**{name}**"
+                    if company:
+                        preview_text += f" | {company}"
+                    if email:
+                        preview_text += f" | ✉️ {email}"
+                    if phone:
+                        preview_text += f" | ☎️ {phone}"
+                    
+                    st.markdown(f'<div style="background-color: {"#d4edda" if is_locked else "#fff3cd"}; padding: 10px; border-radius: 5px; border-left: 4px solid {status_color};">{preview_text}</div>', unsafe_allow_html=True)
+                    
+                    # Controls row
+                    ctrl_col1, ctrl_col2, ctrl_col3, ctrl_col4 = st.columns([2, 2, 2, 2])
+                    
+                    # Lock/Unlock toggle
+                    with ctrl_col1:
+                        if st.button(f"{'🔓 Unlock' if is_locked else '🔒 Lock'}", 
+                                   key=f"lock_{idx}",
+                                   help=f"{'Unlock to allow re-processing' if is_locked else 'Lock to protect from changes'}"):
+                            st.session_state.processed_cards[idx]['locked'] = not is_locked
+                            st.rerun()
+                    
+                    # Retry button (only if unlocked)
+                    with ctrl_col2:
+                        retry_disabled = is_locked
+                        if st.button("🔄 Retry", key=f"retry_{idx}", 
+                                   disabled=retry_disabled,
+                                   help="Re-process this card with current settings" if not retry_disabled else "Unlock first to retry"):
+                            # Retry logic will be handled below
+                            if f'retry_card_{idx}' not in st.session_state:
+                                st.session_state[f'retry_card_{idx}'] = True
+                                st.rerun()
+                    
+                    # Download buttons
+                    with ctrl_col3:
+                        if include_vcf:
                             st.download_button(
                                 label=f"📥 VCF",
                                 data=card['vcf_content'],
@@ -737,9 +897,8 @@ def main():
                                 key=f"vcf_{idx}_{card['filename']}"
                             )
                     
-                    # CSV download
-                    if include_csv:
-                        with col_csv:
+                    with ctrl_col4:
+                        if include_csv:
                             # Export single contact to CSV
                             single_csv = export_processor.export_single_to_csv(card['contact_data'])
                             st.download_button(
