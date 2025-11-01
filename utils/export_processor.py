@@ -54,6 +54,20 @@ class ExportProcessor:
         
         return df
     
+    def export_single_to_csv(self, contact: Dict, include_source: bool = False) -> bytes:
+        """
+        Export a single contact to CSV format.
+        
+        Args:
+            contact: Single contact dictionary
+            include_source: Whether to include source file column
+            
+        Returns:
+            CSV data as bytes
+        """
+        # Wrap single contact in a list
+        return self.export_to_csv([contact], include_source=include_source)
+    
     def export_to_csv(self, contacts: List[Dict], include_source: bool = True) -> bytes:
         """
         Export contacts to CSV format.
@@ -72,9 +86,9 @@ class ExportProcessor:
             sources = [c.get('source', 'Unknown') for c in contacts]
             df.insert(0, 'Source', sources)
         
-        # Convert to CSV
+        # Convert to CSV with explicit comma delimiter
         buffer = BytesIO()
-        df.to_csv(buffer, index=False, encoding='utf-8')
+        df.to_csv(buffer, index=False, encoding='utf-8', sep=',')
         return buffer.getvalue()
     
     def export_to_excel(self, contacts: List[Dict], include_source: bool = True) -> bytes:

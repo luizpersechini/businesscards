@@ -720,17 +720,38 @@ def main():
             with download_col1:
                 st.markdown("### 📄 Individual Files")
                 
-                # Individual VCF downloads
-                if include_vcf:
-                    st.markdown("**VCF Files:**")
-                    for card in st.session_state.processed_cards:
-                        st.download_button(
-                            label=f"📥 {card['filename']}.vcf",
-                            data=card['vcf_content'],
-                            file_name=f"{card['filename']}.vcf",
-                            mime="text/vcard",
-                            key=f"vcf_{card['filename']}"
-                        )
+                # Individual downloads for each contact
+                for idx, card in enumerate(st.session_state.processed_cards):
+                    st.markdown(f"**Contact {idx+1}: {card['filename']}**")
+                    
+                    col_vcf, col_csv = st.columns(2)
+                    
+                    # VCF download
+                    if include_vcf:
+                        with col_vcf:
+                            st.download_button(
+                                label=f"📥 VCF",
+                                data=card['vcf_content'],
+                                file_name=f"{card['filename']}.vcf",
+                                mime="text/vcard",
+                                key=f"vcf_{idx}_{card['filename']}"
+                            )
+                    
+                    # CSV download
+                    if include_csv:
+                        with col_csv:
+                            # Export single contact to CSV
+                            single_csv = export_processor.export_single_to_csv(card['contact_data'])
+                            st.download_button(
+                                label=f"📊 CSV",
+                                data=single_csv,
+                                file_name=f"{card['filename']}.csv",
+                                mime="text/csv",
+                                key=f"csv_{idx}_{card['filename']}"
+                            )
+                    
+                    if idx < len(st.session_state.processed_cards) - 1:
+                        st.markdown("---")
             
             with download_col2:
                 st.markdown("### 📦 Bulk Downloads")
