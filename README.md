@@ -2,29 +2,28 @@
 
 A powerful web-based application that automatically extracts contact information from business card images and generates VCF (vCard) files ready to import into Outlook and other contact managers.
 
-**Version:** 1.2.0  
+**Version:** 1.3.0  
 **Status:** Production Ready ✅  
-**Last Updated:** October 31, 2025
+**Last Updated:** November 3, 2025
 
 ## ✨ Features
 
 ### Core Functionality
-- **🆕 Vision Mode (v1.1.0)**: Direct image analysis with vision models (llama3.2-vision, llava)
+- **Vision Mode (Default)**: Direct image analysis with vision models (llava:13b, llama3.2-vision, llava)
   - No OCR needed - AI "sees" the card directly
   - 10-20% more accurate than traditional OCR
   - Configurable timeout (60-300s)
+  - **Default model: llava:13b** for best accuracy
 - **Multiple Detection Modes**: 
-  - Improved Auto (document scanner algorithm)
+  - Automatic (document scanner algorithm - recommended)
   - Manual Grid Layout with visual preview
   - Manual Single Card
-- **Multi-language OCR**: English and Portuguese support (+ Spanish, French, German, Italian)
 - **QR Code Reading**: Dual detection (pyzbar + OpenCV fallback) with auto-fallback on errors
-- **LLM-Powered Parsing**: Uses Ollama to intelligently extract contact fields
-- **🆕 Multiple Export Formats (v1.2.0)**:
+- **AI-Powered Extraction**: Uses Ollama vision models to intelligently extract contact fields directly from images
+  - **Multiple Export Formats**:
   - **VCF (vCard)**: Outlook/Contacts/iPhone compatible format
-  - **CSV**: Universal spreadsheet format for Excel/Google Sheets
   - **Excel (XLSX)**: Formatted workbook with auto-sized columns
-  - **Outlook CSV**: Special format for direct Outlook import
+  - **Outlook CSV**: Special format for direct Outlook import (exact format match - tested successfully)
   - **Complete Package**: ZIP with all selected formats
 - **Bulk Processing**: Process multiple cards and download as ZIP
 
@@ -176,12 +175,63 @@ streamlit run app.py
 
 ### Importing to Outlook
 
+#### Outlook CSV Format Options
+
+The app provides multiple CSV format options for Outlook import. If email or phone fields are not importing correctly, try these options:
+
+1. **Simplified Format**: Minimal fields only (First Name, Last Name, Company, Email, Phone) - best for maximum compatibility
+2. **Field Name Variations**: 
+   - Email: "E-mail Address", "Email Address", or "Email"
+   - Phone: "Business Phone", "Phone", or "Work Phone"
+3. **Quote Options**: Enable/disable field quoting if Outlook has parsing issues
+
+**Recommended Settings for Different Outlook Versions:**
+- **Outlook 365/2019**: Use "E-mail Address" + "Business Phone" with quotes enabled
+- **Outlook Web**: Try "Email Address" + "Phone" with simplified format
+- **Older Outlook**: Try "Email" + "Phone" without quotes
+
 #### Outlook Desktop (Windows/Mac)
 1. Open Outlook
 2. Go to File → Open & Export → Import/Export
 3. Select "Import a vCard file (.vcf)"
 4. Browse to downloaded VCF file
 5. Click OK
+
+#### Importing Outlook CSV Format
+
+1. **Prepare CSV Export**:
+   - Process your business cards
+   - Select "Outlook Import CSV" checkbox
+   - Open "⚙️ Outlook CSV Options" expander
+   - Choose format options based on your Outlook version:
+     - Try "Simplified Format" first if import fails
+     - Change field names if auto-mapping doesn't work
+     - Toggle "Quote Fields" if parsing errors occur
+   
+2. **Import CSV to Outlook**:
+   - Open Outlook
+   - Go to File → Open & Export → Import/Export
+   - Select "Import from another program or file"
+   - Choose "Comma Separated Values (Windows)"
+   - Browse to downloaded CSV file
+   - Click "Next"
+   
+3. **Map Fields**:
+   - Review the field mapping screen
+   - If fields don't auto-map, click "Map Custom Fields"
+   - Drag CSV fields from left to Outlook fields on right:
+     - CSV "E-mail Address" → Outlook "E-mail"
+     - CSV "Business Phone" → Outlook "Business Phone"
+   - Click OK → Next → Finish
+
+4. **Troubleshooting CSV Import**:
+   - **Email not importing**: The default format now uses exact Outlook export format - should work automatically
+   - **Phone not importing**: Same as above - format matches Outlook exports exactly
+   - **Fields merged with name**: Use "Simplified Format" + disable quotes if default doesn't work
+   - **Import fails**: Check CSV Diagnostic Report in the app
+   - **Still not working**: Generate test CSV files with `python test_csv_generation.py` and test each format
+
+**✅ Success Tip**: The default CSV format is based on actual Outlook export format analysis and has been tested successfully with email and phone imports. If you still have issues, try the alternative field names in the options.
 
 #### Outlook Web
 1. Go to People/Contacts

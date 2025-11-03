@@ -54,6 +54,20 @@ class ExportProcessor:
         
         return df
     
+    def export_single_to_csv(self, contact: Dict, include_source: bool = False) -> bytes:
+        """
+        Export a single contact to CSV format.
+        
+        Args:
+            contact: Single contact dictionary
+            include_source: Whether to include source file column
+            
+        Returns:
+            CSV data as bytes
+        """
+        # Wrap single contact in a list
+        return self.export_to_csv([contact], include_source=include_source)
+    
     def export_to_csv(self, contacts: List[Dict], include_source: bool = True) -> bytes:
         """
         Export contacts to CSV format.
@@ -72,9 +86,16 @@ class ExportProcessor:
             sources = [c.get('source', 'Unknown') for c in contacts]
             df.insert(0, 'Source', sources)
         
-        # Convert to CSV
+        # Convert to CSV with explicit comma delimiter and Windows line endings
         buffer = BytesIO()
-        df.to_csv(buffer, index=False, encoding='utf-8')
+        df.to_csv(
+            buffer, 
+            index=False, 
+            encoding='utf-8-sig',  # UTF-8 with BOM for Excel compatibility
+            sep=',',
+            lineterminator='\r\n',  # Windows-style CRLF for better compatibility
+            quoting=1  # QUOTE_MINIMAL
+        )
         return buffer.getvalue()
     
     def export_to_excel(self, contacts: List[Dict], include_source: bool = True) -> bytes:
@@ -125,49 +146,303 @@ class ExportProcessor:
         
         return buffer.getvalue()
     
-    def export_to_outlook_csv(self, contacts: List[Dict]) -> bytes:
+    def export_to_outlook_csv(self, contacts: List[Dict], 
+                             email_field_name: str = 'E-mail Address',
+                             phone_field_name: str = 'Business Phone') -> bytes:
         """
         Export contacts to Outlook-compatible CSV format.
+        Uses exact Outlook column names and Windows-style line endings (CRLF).
+        Focuses on essential fields in correct order for auto-mapping.
         
         Args:
             contacts: List of contact dictionaries
+            email_field_name: Field name for email (options: 'E-mail Address', 'Email Address', 'Email')
+            phone_field_name: Field name for phone (options: 'Business Phone', 'Phone', 'Work Phone')
             
         Returns:
             Outlook CSV data as bytes
         """
-        # Outlook CSV requires specific column names
-        outlook_columns = {
-            'First Name': 'firstName',
-            'Last Name': 'lastName',
-            'Full Name': 'fullName',
-            'Job Title': 'title',
-            'Company': 'company',
-            'E-mail Address': 'email',
-            'Business Phone': 'phone',
-            'Mobile Phone': 'mobile',
-            'Business Street': 'address',
-            'Business City': 'city',
-            'Business State': 'state',
-            'Business Postal Code': 'zip',
-            'Business Country': 'country',
-            'Web Page': 'website',
-            'Notes': 'notes'
-        }
+        # Outlook CSV requires EXACT column names and order as Outlook exports
+        # Based on actual Outlook export format analysis
+        # CRITICAL: Order matters - Outlook expects fields in specific positions
+        outlook_columns = [
+            # Position 1-3: Name fields (ALWAYS first - Outlook requirement)
+            ('First Name', 'firstName'),
+            ('Middle Name', None),
+            ('Last Name', 'lastName'),
+            
+            # Position 4-8: Additional name fields
+            ('Title', None),  # Honorific (Mr., Mrs., etc.)
+            ('Suffix', None),
+            ('Nickname', None),
+            ('Given Yomi', None),
+            ('Surname Yomi', None),
+            
+            # Position 9: Email (EXACT position as Outlook exports)
+            (email_field_name, 'email'),
+            ('E-mail 2 Address', None),
+            ('E-mail 3 Address', None),
+            
+            # Position 12-14: Phone numbers (EXACT positions)
+            ('Home Phone', None),
+            ('Home Phone 2', None),
+            (phone_field_name, 'phone'),
+            ('Business Phone 2', None),
+            ('Mobile Phone', 'mobile'),
+            
+            # Position 17-29: Additional phone fields
+            ('Car Phone', None),
+            ('Other Phone', None),
+            ('Primary Phone', None),
+            ('Pager', None),
+            ('Business Fax', None),
+            ('Home Fax', None),
+            ('Other Fax', None),
+            ('Company Main Phone', None),
+            ('Callback', None),
+            ('Radio Phone', None),
+            ('Telex', None),
+            ('TTY/TDD Phone', None),
+            ('IMAddress', None),
+            
+            # Position 30: Job Title
+            ('Job Title', 'title'),
+            ('Department', None),
+            
+            # Position 32: Company (EXACT position as Outlook exports)
+            ('Company', 'company'),
+            
+            # Position 33-37: Additional company fields
+            ('Office Location', None),
+            ("Manager's Name", None),
+            ("Assistant's Name", None),
+            ("Assistant's Phone", None),
+            ('Company Yomi', None),
+            
+            # Position 38-42: Business address (EXACT positions)
+            ('Business Street', 'address'),
+            ('Business City', 'city'),
+            ('Business State', 'state'),
+            ('Business Postal Code', 'zip'),
+            ('Business Country/Region', 'country'),
+            
+            # Position 43-48: Home address
+            ('Home Street', None),
+            ('Home City', None),
+            ('Home State', None),
+            ('Home Postal Code', None),
+            ('Home Country/Region', None),
+            
+            # Position 49-53: Other address
+            ('Other Street', None),
+            ('Other City', None),
+            ('Other State', None),
+            ('Other Postal Code', None),
+            ('Other Country/Region', None),
+            
+            # Position 54-58: Web and social
+            ('Personal Web Page', None),
+            ('Spouse', None),
+            ('Schools', None),
+            ('Hobby', None),
+            ('Location', None),
+            ('Web Page', 'website'),
+            
+            # Position 59-61: Dates and notes
+            ('Birthday', None),
+            ('Anniversary', None),
+            ('Notes', 'notes'),
+        ]
         
-        # Create rows with Outlook-specific columns
+        # Create rows with Outlook-specific columns (maintaining order)
         rows = []
         for contact in contacts:
+            # Pre-process contact data: split fullName if firstName/lastName are missing
+            processed_contact = contact.copy()
+            
+            # If firstName or lastName is missing, try to split fullName
+            if not processed_contact.get('firstName') and not processed_contact.get('lastName'):
+                full_name = processed_contact.get('fullName', '')
+                if full_name:
+                    name_parts = full_name.strip().split(' ', 1)
+                    if len(name_parts) == 1:
+                        # Only one name, use as firstName
+                        processed_contact['firstName'] = name_parts[0]
+                        processed_contact['lastName'] = ''
+                    elif len(name_parts) == 2:
+                        # Split into first and last
+                        processed_contact['firstName'] = name_parts[0]
+                        processed_contact['lastName'] = name_parts[1]
+            
             row = {}
-            for outlook_col, contact_key in outlook_columns.items():
-                row[outlook_col] = contact.get(contact_key, '')
+            for outlook_col, contact_key in outlook_columns:
+                if contact_key is None:
+                    # Field not supported, leave empty
+                    row[outlook_col] = ''
+                else:
+                    # Get value from processed contact data
+                    value = processed_contact.get(contact_key, '')
+                    # Ensure value is string and strip whitespace
+                    # Also ensure None/null values become empty strings
+                    if value is None or value == 'null' or value == 'None':
+                        value = ''
+                    else:
+                        value = str(value).strip()
+                        # Remove any non-printable characters that might confuse Outlook
+                        value = ''.join(char for char in value if char.isprintable() or char in ['\n', '\r', '\t'])
+                        
+                        # Special handling for email: CRITICAL - remove commas and quotes
+                        if 'email' in outlook_col.lower() or 'e-mail' in outlook_col.lower():
+                            # CRITICAL: Remove commas from email (commas break CSV parsing)
+                            value = value.replace(',', '')
+                            # Remove quotes from email
+                            value = value.replace('"', '').replace("'", '')
+                            # Remove all whitespace
+                            value = value.replace(' ', '').replace('\t', '').replace('\n', '').replace('\r', '')
+                            # Convert to lowercase
+                            value = value.lower()
+                            # Validate email format
+                            if '@' in value and '.' in value.split('@')[1]:
+                                # Valid email format
+                                pass
+                            else:
+                                # Invalid email, clear it
+                                value = ''
+                        
+                        # Special handling for phone: remove commas and quotes
+                        elif 'Phone' in outlook_col or 'phone' in outlook_col.lower():
+                            # CRITICAL: Remove commas from phone numbers
+                            value = value.replace(',', ' ')
+                            # Remove quotes
+                            value = value.replace('"', '').replace("'", '')
+                            # Keep only +, digits, spaces, parentheses, hyphens
+                            value = ''.join(char for char in value if char.isdigit() or char in ['+', ' ', '(', ')', '-'])
+                            # Remove extra spaces
+                            value = ' '.join(value.split())
+                        
+                        # For all other fields: remove commas that could break CSV
+                        else:
+                            # Remove problematic characters that could break CSV parsing
+                            # But preserve commas in addresses (they're part of the data)
+                            if outlook_col not in ['Business Street', 'Address', 'Notes']:
+                                # Remove commas from non-address fields
+                                value = value.replace(',', ';')
+                            # Remove quotes
+                            value = value.replace('"', '').replace("'", '')
+                    
+                    row[outlook_col] = value if value else ''
             rows.append(row)
         
-        # Create DataFrame with Outlook columns
-        df = pd.DataFrame(rows)
+        # Create DataFrame with exact Outlook column order (preserve order from list)
+        column_order = [col[0] for col in outlook_columns]
+        df = pd.DataFrame(rows, columns=column_order)
+        
+        # Convert to CSV with Windows-style line endings (CRLF) and UTF-8-BOM encoding
+        # Use QUOTE_ALL to ensure all fields are properly quoted (more robust for Outlook)
+        buffer = BytesIO()
+        df.to_csv(
+            buffer, 
+            index=False, 
+            encoding='utf-8-sig',  # UTF-8 with BOM (required for Excel/Outlook)
+            lineterminator='\r\n',  # Windows-style CRLF (required for Outlook)
+            quoting=1,  # QUOTE_ALL - quote all fields for maximum compatibility
+            doublequote=True,  # Escape quotes by doubling them
+            escapechar=None  # No escape char needed when doublequote is True
+        )
+        return buffer.getvalue()
+    
+    def export_to_outlook_csv_simple(self, contacts: List[Dict],
+                                     email_field_name: str = 'Email Address',
+                                     phone_field_name: str = 'Phone',
+                                     use_quotes: bool = False) -> bytes:
+        """
+        Export contacts to simplified Outlook-compatible CSV format.
+        Minimal fields only for maximum compatibility.
+        
+        Args:
+            contacts: List of contact dictionaries
+            email_field_name: Field name for email (options: 'E-mail Address', 'Email Address', 'Email')
+            phone_field_name: Field name for phone (options: 'Business Phone', 'Phone', 'Work Phone')
+            use_quotes: Whether to quote fields (False = QUOTE_NONE, True = QUOTE_ALL)
+            
+        Returns:
+            Outlook CSV data as bytes
+        """
+        # Minimal field set - only essential fields
+        outlook_columns = [
+            ('First Name', 'firstName'),
+            ('Last Name', 'lastName'),
+            ('Company', 'company'),
+            (email_field_name, 'email'),
+            (phone_field_name, 'phone'),
+        ]
+        
+        # Create rows
+        rows = []
+        for contact in contacts:
+            processed_contact = contact.copy()
+            
+            # Split fullName if needed
+            if not processed_contact.get('firstName') and not processed_contact.get('lastName'):
+                full_name = processed_contact.get('fullName', '')
+                if full_name:
+                    name_parts = full_name.strip().split(' ', 1)
+                    if len(name_parts) == 1:
+                        processed_contact['firstName'] = name_parts[0]
+                        processed_contact['lastName'] = ''
+                    elif len(name_parts) == 2:
+                        processed_contact['firstName'] = name_parts[0]
+                        processed_contact['lastName'] = name_parts[1]
+            
+            row = {}
+            for outlook_col, contact_key in outlook_columns:
+                value = processed_contact.get(contact_key, '')
+                
+                if value is None or value == 'null' or value == 'None':
+                    value = ''
+                else:
+                    value = str(value).strip()
+                    
+                    # Sanitize email
+                    if 'email' in outlook_col.lower() or 'e-mail' in outlook_col.lower():
+                        value = value.replace(',', '').replace('"', '').replace("'", '')
+                        value = value.replace(' ', '').lower()
+                        if '@' not in value or '.' not in value.split('@')[1]:
+                            value = ''
+                    
+                    # Sanitize phone
+                    elif 'phone' in outlook_col.lower():
+                        value = value.replace(',', ' ').replace('"', '').replace("'", '')
+                        value = ''.join(char for char in value if char.isdigit() or char in ['+', ' ', '(', ')', '-'])
+                        value = ' '.join(value.split())
+                    
+                    # Sanitize other fields
+                    else:
+                        value = value.replace('"', '').replace("'", '')
+                        # Remove commas from non-address fields
+                        if outlook_col not in ['Business Street', 'Address']:
+                            value = value.replace(',', ';')
+                
+                row[outlook_col] = value if value else ''
+            rows.append(row)
+        
+        # Create DataFrame
+        column_order = [col[0] for col in outlook_columns]
+        df = pd.DataFrame(rows, columns=column_order)
         
         # Convert to CSV
         buffer = BytesIO()
-        df.to_csv(buffer, index=False, encoding='utf-8-sig')  # UTF-8 with BOM for Excel/Outlook
+        quoting_mode = 1 if use_quotes else 3  # QUOTE_ALL (1) or QUOTE_NONE (3)
+        
+        df.to_csv(
+            buffer,
+            index=False,
+            encoding='utf-8-sig',
+            lineterminator='\r\n',
+            quoting=quoting_mode,
+            doublequote=True if use_quotes else False,
+            escapechar=None
+        )
         return buffer.getvalue()
     
     def create_export_package(self, 

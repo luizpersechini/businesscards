@@ -61,12 +61,21 @@ class ImprovedCardDetector:
         # Apply Gaussian blur
         blurred = cv2.GaussianBlur(gray, (5, 5), 0)
         
-        # Apply Canny edge detection
-        edged = cv2.Canny(blurred, 50, 150)
+        # Try multiple edge detection strategies for better grid detection
+        # Strategy 1: Canny with lower threshold
+        edged1 = cv2.Canny(blurred, 30, 100)
+        
+        # Strategy 2: Adaptive thresholding (better for grids)
+        edged2 = cv2.adaptiveThreshold(blurred, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, 
+                                       cv2.THRESH_BINARY_INV, 11, 2)
+        
+        # Combine both strategies
+        edged = cv2.bitwise_or(edged1, edged2)
         
         # Dilate edges to close gaps
-        kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (5, 5))
+        kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
         edged = cv2.dilate(edged, kernel, iterations=1)
+        edged = cv2.erode(edged, kernel, iterations=1)
         
         # Find contours
         contours = cv2.findContours(edged.copy(), cv2.RETR_LIST, cv2.CHAIN_APPROX_SIMPLE)
@@ -77,7 +86,7 @@ class ImprovedCardDetector:
         used_regions = []
         
         # Loop through contours
-        for c in contours[:30]:  # Check top 30 contours
+        for c in contours[:50]:  # Check top 50 contours (increased for grids)
             # Get area first to filter early
             area = cv2.contourArea(c)
             
@@ -89,8 +98,8 @@ class ImprovedCardDetector:
             peri = cv2.arcLength(c, True)
             approx = cv2.approxPolyDP(c, 0.02 * peri, True)
             
-            # Business cards should have 4 corners (rectangles)
-            if len(approx) != 4:
+            # Business cards should have 4-8 corners (more flexible for grids)
+            if len(approx) < 4 or len(approx) > 8:
                 continue
             
             # Get bounding rectangle
@@ -98,28 +107,31 @@ class ImprovedCardDetector:
             
             # Check aspect ratio (business cards are typically 1.586:1)
             # Standard: 85.6mm x 53.98mm
-            # Allow range: 1.3 to 2.0 for horizontal, or inverse for vertical
+            # More flexible range for grid layouts
             aspect_ratio = float(w) / h if h > 0 else 0
             
             # QR codes are square (1:1), logos vary but cards are specific
-            if not (1.3 < aspect_ratio < 2.0 or 0.5 < aspect_ratio < 0.77):
+            # Relaxed constraints for better grid detection
+            if not (1.2 < aspect_ratio < 2.2 or 0.45 < aspect_ratio < 0.85):
                 continue
             
             # Check extent (how much of bounding box is filled)
             # Business cards fill their bounding box well
             # QR codes and logos may not
             extent = area / (w * h) if (w * h) > 0 else 0
-            if extent < 0.75:  # Cards should fill at least 75% of bbox
+            if extent < 0.70:  # Relaxed from 0.75 to 0.70
                 continue
             
             # Check if this overlaps with already detected cards
+            # Reduced overlap threshold for better grid detection
             overlaps = False
             for used_x, used_y, used_w, used_h in used_regions:
                 x_overlap = max(0, min(x + w, used_x + used_w) - max(x, used_x))
                 y_overlap = max(0, min(y + h, used_y + used_h) - max(y, used_y))
                 overlap_area = x_overlap * y_overlap
                 
-                if overlap_area > (w * h * 0.3):
+                # Reduced from 0.3 to 0.2 (20% overlap allowed)
+                if overlap_area > (w * h * 0.2):
                     overlaps = True
                     break
             
@@ -128,8 +140,25 @@ class ImprovedCardDetector:
             
             # Apply perspective transform to get card
             # Scale points back to original image
-            pts = approx.reshape(4, 2) * ratio
-            card_warped = self.four_point_transform(original, pts)
+            if len(approx) == 4:
+                # Use 4-point transform for perfect rectangles
+                pts = approx.reshape(4, 2) * ratio
+                card_warped = self.four_point_transform(original, pts)
+            else:
+                # Use bounding box for non-perfect rectangles
+                x_orig = int(x * ratio)
+                y_orig = int(y * ratio)
+                w_orig = int(w * ratio)
+                h_orig = int(h * ratio)
+                
+                # Add small padding
+                padding = 5
+                y1 = max(0, y_orig - padding)
+                y2 = min(original.shape[0], y_orig + h_orig + padding)
+                x1 = max(0, x_orig - padding)
+                x2 = min(original.shape[1], x_orig + w_orig + padding)
+                
+                card_warped = original[y1:y2, x1:x2]
             
             if card_warped is not None and card_warped.shape[0] > 100 and card_warped.shape[1] > 100:
                 detected_cards.append((card_warped, c))
