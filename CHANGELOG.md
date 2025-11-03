@@ -2,6 +2,69 @@
 
 All notable changes to the Business Card Scanner project will be documented in this file.
 
+## [1.3.0] - 2025-11-03
+
+### 🎨 UI Improvements & Code Cleanup
+
+#### Added
+- **CSV Validator Module** (`utils/csv_validator.py`): Diagnostic tool for Outlook CSV compatibility
+  - Validates CSV format, encoding, line endings, and field names
+  - Generates detailed diagnostic reports
+  - Detects common import issues
+- **Test CSV Generator** (`test_csv_generation.py`): Generate test CSV files for Outlook compatibility testing
+- **Exact Outlook CSV Format**: CSV export now matches Outlook's native export format exactly
+  - 61 columns in exact Outlook order
+  - Field positions match Outlook expectations (E-mail Address at position 9, Business Phone at position 14)
+  - Based on analysis of actual Outlook CSV exports
+
+#### Changed
+- **UI Cleanup**: Major interface reorganization
+  - Removed regular CSV export option (kept only Outlook CSV)
+  - Individual cards now displayed as compact list format with smaller icons
+  - Better visual separation between Individual Cards Management and Bulk Downloads sections
+  - Export format selection simplified (VCF, Excel, Outlook CSV only)
+- **Vision Mode Only**: Removed OCR+LLM processing mode
+  - Application now uses Vision mode exclusively for better accuracy
+  - Simplified sidebar configuration
+  - Removed all OCR and LLM processor dependencies
+- **Default Vision Model**: Changed to `llava:13b` (most accurate)
+  - Previously defaulted to `llama3.2-vision`
+  - Better extraction quality out of the box
+- **Detection Mode Renamed**: "Improved Auto (Recommended)" renamed to "Automatic"
+  - More intuitive naming
+  - Removed old "Automatic" detection mode (based on CardDetector)
+  - Only uses ImprovedCardDetector for automatic detection
+- **Outlook CSV Format Options**: Added configurable field names
+  - Support for "E-mail Address", "Email Address", or "Email"
+  - Support for "Business Phone", "Phone", or "Work Phone"
+  - Simplified format option for maximum compatibility
+  - Quote/no-quote options for troubleshooting
+
+#### Removed
+- **OCR+LLM Mode**: Completely removed OCR+LLM processing option
+  - Removed `OCRProcessor` imports and initialization
+  - Removed `LLMProcessor` imports and initialization
+  - Removed OCR language selection UI
+  - Removed LLM model selection for OCR mode
+- **Old Automatic Detection**: Removed legacy `CardDetector` mode
+  - Removed `CardDetector` imports
+  - Only uses `ImprovedCardDetector` for automatic detection
+- **Regular CSV Export**: Removed standard CSV option
+  - Users can still export to Excel or use Outlook CSV
+  - Outlook CSV is now the primary CSV format
+
+#### Fixed
+- **Outlook CSV Import**: Fixed email and phone field import issues
+  - CSV format now matches Outlook export exactly (tested successfully)
+  - Proper field ordering and naming ensures automatic mapping
+  - Email and phone fields now import correctly to Outlook
+
+#### Technical
+- Simplified codebase by removing unused OCR/LLM processing paths
+- Reduced dependencies (no longer need OCRProcessor/LLMProcessor for main flow)
+- Better separation of concerns in export module
+- CSV validator enables troubleshooting import issues
+
 ## [1.2.0] - 2025-10-31
 
 ### 🆕 Major Feature: Multiple Export Formats

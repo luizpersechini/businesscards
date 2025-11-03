@@ -17,11 +17,8 @@ from typing import List, Tuple
 # Add utils to path
 sys.path.append(os.path.dirname(__file__))
 
-from utils.card_detector import CardDetector
 from utils.improved_card_detector import ImprovedCardDetector
-from utils.ocr_processor import OCRProcessor
 from utils.qr_reader import QRReader
-from utils.llm_processor import LLMProcessor
 from utils.vision_processor import VisionProcessor
 from utils.vcf_generator import VCFGenerator
 from utils.export_processor import ExportProcessor
@@ -263,18 +260,14 @@ def split_image_grid(image: np.ndarray, rows: int, cols: int,
     return cards
 
 
-def process_single_card_retry(card_image_rgb, processing_mode, vision_model, vision_timeout, use_llm, ollama_model, ocr_languages):
+def process_single_card_retry(card_image_rgb, vision_model, vision_timeout):
     """
     Retry processing a single card.
     
     Args:
         card_image_rgb: Card image in RGB format
-        processing_mode: Vision or OCR+LLM
         vision_model: Ollama vision model name
         vision_timeout: Timeout for vision processing
-        use_llm: Whether to use LLM for OCR mode
-        ollama_model: Ollama model name for OCR mode
-        ocr_languages: Languages for OCR
     
     Returns:
         Dictionary with reprocessed card data or None if failed
@@ -286,12 +279,7 @@ def process_single_card_retry(card_image_rgb, processing_mode, vision_model, vis
         # Initialize processors
         qr_reader = QRReader()
         vcf_generator = VCFGenerator()
-        
-        if processing_mode == "Vision (Recommended)":
-            vision_processor = VisionProcessor(model=vision_model)
-        else:
-            ocr_processor = OCRProcessor(languages=ocr_languages)
-            llm_processor = LLMProcessor(model=ollama_model) if use_llm else None
+        vision_processor = VisionProcessor(model=vision_model)
         
         # QR Code Detection
         qr_data = None
@@ -302,26 +290,16 @@ def process_single_card_retry(card_image_rgb, processing_mode, vision_model, vis
         except Exception as e:
             st.warning(f"⚠️ QR code reading failed: {str(e)}")
         
-        # Extract contact information
-        if processing_mode == "Vision (Recommended)":
-            contact_data = vision_processor.extract_contact_from_image(card_image, qr_data, timeout=vision_timeout)
-            
-            if 'error' in contact_data:
-                if qr_data:
-                    st.warning("⚠️ Using QR code data as fallback...")
-                    contact_data = qr_to_contact_data(qr_data)
-                else:
-                    st.error(f"❌ Vision processing error: {contact_data.get('message', 'Unknown')}")
-                    return None
-        else:
-            # OCR mode
-            ocr_results = ocr_processor.extract_with_preprocessing(card_image)
-            raw_text = ocr_results['raw_text']
-            
-            if use_llm and llm_processor and llm_processor.is_ollama_running():
-                contact_data = llm_processor.extract_contact_info(raw_text, qr_data)
+        # Extract contact information (Vision mode)
+        contact_data = vision_processor.extract_contact_from_image(card_image, qr_data, timeout=vision_timeout)
+        
+        if 'error' in contact_data:
+            if qr_data:
+                st.warning("⚠️ Using QR code data as fallback...")
+                contact_data = qr_to_contact_data(qr_data)
             else:
-                contact_data = llm_processor._fallback_extraction(raw_text, qr_data) if llm_processor else {}
+                st.error(f"❌ Vision processing error: {contact_data.get('message', 'Unknown')}")
+                return None
         
         if not contact_data or 'error' in contact_data:
             return None
@@ -341,17 +319,14 @@ def process_single_card_retry(card_image_rgb, processing_mode, vision_model, vis
         return None
 
 
-def process_business_cards(uploaded_files, processing_mode, vision_model, vision_timeout, use_llm, ollama_model, ocr_languages, detection_mode, grid_rows, grid_cols, min_percent, max_percent, margin_top, margin_bottom, margin_left, margin_right):
+def process_business_cards(uploaded_files, vision_model, vision_timeout, detection_mode, grid_rows, grid_cols, min_percent, max_percent, margin_top, margin_bottom, margin_left, margin_right):
     """
     Main processing pipeline for business cards.
     
     Args:
         uploaded_files: List of uploaded image files
-        processing_mode: "Vision (Recommended)" or "OCR + LLM"
-        vision_model: Vision model name (for vision mode)
-        use_llm: Whether to use LLM for processing (OCR mode)
-        ollama_model: Ollama model name (OCR mode)
-        ocr_languages: List of language codes for OCR
+        vision_model: Vision model name
+        vision_timeout: Timeout for vision processing
         detection_mode: Detection mode (Automatic/Manual)
         grid_rows: Number of rows for grid layout
         grid_cols: Number of columns for grid layout
@@ -360,35 +335,19 @@ def process_business_cards(uploaded_files, processing_mode, vision_model, vision
         margin_top/bottom/left/right: Margins for grid layout
     """
     # Initialize processors
-    card_detector = CardDetector()
     improved_detector = ImprovedCardDetector(min_area_percent=min_percent, max_area_percent=max_percent)
     qr_reader = QRReader()
     vcf_generator = VCFGenerator()
     
-    # Initialize mode-specific processors
-    if processing_mode == "Vision (Recommended)":
-        vision_processor = VisionProcessor(model=vision_model)
-        ocr_processor = None
-        llm_processor = None
-    else:
-        vision_processor = None
-        ocr_processor = OCRProcessor(languages=ocr_languages, gpu=False)
-        llm_processor = LLMProcessor(model=ollama_model) if use_llm else None
+    # Initialize vision processor (always use Vision mode)
+    vision_processor = VisionProcessor(model=vision_model)
     
     # Check Ollama status
-    ollama_status = "Not used"
-    if processing_mode == "Vision (Recommended)":
-        if vision_processor.check_ollama_status():
-            ollama_status = f"✅ Connected ({vision_model})"
-        else:
-            ollama_status = "⚠️ Not running or model not available"
-            st.error(f"Vision model '{vision_model}' not available. Install with: ollama pull {vision_model}")
-    elif use_llm:
-        if llm_processor and llm_processor.is_ollama_running():
-            ollama_status = "✅ Connected"
-        else:
-            ollama_status = "⚠️ Not running (using fallback)"
-            st.warning("Ollama is not running. Using fallback extraction method.")
+    if vision_processor.check_ollama_status():
+        ollama_status = f"✅ Connected ({vision_model})"
+    else:
+        ollama_status = "⚠️ Not running or model not available"
+        st.error(f"Vision model '{vision_model}' not available. Install with: ollama pull {vision_model}")
     
     st.sidebar.info(f"**Ollama Status:** {ollama_status}")
     
@@ -421,15 +380,10 @@ def process_business_cards(uploaded_files, processing_mode, vision_model, vision
                                                  margin_top, margin_bottom, margin_left, margin_right)
                 st.success(f"✅ Split into {len(detected_cards)} cards from grid")
         
-        elif detection_mode == "Improved Auto (Recommended)":
+        elif detection_mode == "Automatic":
             with st.spinner("✨ Detecting cards with document scanner algorithm..."):
                 detected_cards = improved_detector.detect_cards(cv_image)
-                st.success(f"✅ Detected {len(detected_cards)} card(s) with improved algorithm")
-        
-        else:  # Automatic (old method)
-            with st.spinner("🔍 Detecting business cards..."):
-                detected_cards = card_detector.detect_cards(cv_image)
-                st.success(f"✅ Detected {len(detected_cards)} card(s)")
+                st.success(f"✅ Detected {len(detected_cards)} card(s) with automatic detection")
         
         # Process each detected card
         for card_idx, (card_image, contour) in enumerate(detected_cards):
@@ -452,78 +406,103 @@ def process_business_cards(uploaded_files, processing_mode, vision_model, vision
                         qr_results = qr_reader.detect_and_decode(card_image)
                         
                         if qr_results:
-                            st.success(f"✅ Found {len(qr_results)} QR code(s)")
                             method_used = qr_results[0].get('method', 'unknown')
-                            st.caption(f"Detection method: {method_used}")
                             qr_data = qr_reader.extract_contact_info(qr_results)
                             
-                            with st.expander("View QR Code Data"):
-                                for qr in qr_results:
-                                    st.json(qr['parsed'])
+                            # Clean status display
+                            st.markdown(f'''
+                            <div style="
+                                background-color: #d4edda;
+                                color: #155724;
+                                padding: 0.75rem;
+                                border-radius: 0.25rem;
+                                border-left: 4px solid #28a745;
+                                margin: 0.5rem 0;
+                            ">
+                                ✅ <strong>Found {len(qr_results)} QR code(s)</strong> ({method_used})
+                            </div>
+                            ''', unsafe_allow_html=True)
                             
                             if qr_data:
-                                st.info(f"📱 QR code provided: {', '.join(qr_data.keys())}")
+                                # Show QR data fields in a clean way
+                                with st.expander("📱 QR Code Data", expanded=False):
+                                    qr_fields = ', '.join(qr_data.keys())
+                                    st.markdown(f"**Available fields:** {qr_fields}")
+                                    for qr in qr_results:
+                                        st.json(qr['parsed'])
                         else:
-                            st.info("No QR codes found on this card")
+                            st.markdown('''
+                            <div style="
+                                background-color: #f8f9fa;
+                                color: #6c757d;
+                                padding: 0.75rem;
+                                border-radius: 0.25rem;
+                                border-left: 4px solid #6c757d;
+                                margin: 0.5rem 0;
+                            ">
+                                ℹ️ No QR codes detected
+                            </div>
+                            ''', unsafe_allow_html=True)
                     
                     except RuntimeError as e:
                         st.error(f"❌ QR code reading failed: {str(e)}")
-                        st.info("💡 Restart app with: ./start_app.sh")
+                        st.markdown('''
+                        <div style="
+                            background-color: #fff3cd;
+                            color: #856404;
+                            padding: 0.75rem;
+                            border-radius: 0.25rem;
+                            border-left: 4px solid #ffc107;
+                            margin: 0.5rem 0;
+                        ">
+                            💡 <strong>Fix:</strong> Restart with <code>./start_app.sh</code>
+                        </div>
+                        ''', unsafe_allow_html=True)
                     except Exception as e:
                         st.warning(f"⚠️ QR scan error: {str(e)}")
                 
-                # Step 3: Extract contact information (Vision or OCR mode)
-                if processing_mode == "Vision (Recommended)":
-                    st.markdown("**👁️ Vision Analysis**")
-                    with st.spinner(f"🤖 Analyzing card image with vision model (timeout: {vision_timeout}s)..."):
-                        contact_data = vision_processor.extract_contact_from_image(
-                            card_image, qr_data, timeout=vision_timeout
-                        )
-                        
-                        if 'error' in contact_data:
-                            error_msg = contact_data.get('message', 'Unknown')
-                            st.error(f"❌ Vision processing error: {error_msg}")
-                            
-                            # Try to use QR code data as fallback
-                            if qr_data:
-                                st.warning("⚠️ Using QR code data as fallback...")
-                                contact_data = qr_to_contact_data(qr_data)
-                                st.success("✅ Contact info extracted from QR code!")
-                            else:
-                                st.info(f"💡 No QR code found. Try OCR mode or ensure vision model is available: ollama pull {vision_model}")
-                                continue
-                        else:
-                            st.success("✅ Vision analysis complete!")
-                
-                else:  # OCR + LLM mode
-                    # OCR Processing
-                    with st.spinner("📝 Extracting text with OCR..."):
-                        ocr_results = ocr_processor.extract_with_preprocessing(card_image)
-                        raw_text = ocr_results['raw_text']
-                        
-                        st.markdown("**Extracted Text:**")
-                        st.text_area(
-                            "OCR Text",
-                            raw_text,
-                            height=150,
-                            key=f"ocr_{file_idx}_{card_idx}",
-                            label_visibility="collapsed"
-                        )
+                # Step 3: Extract contact information (Vision mode)
+                st.markdown("---")
+                st.markdown("**👁️ Vision Analysis**")
+                with st.spinner(f"🤖 Analyzing card image (timeout: {vision_timeout}s)..."):
+                    contact_data = vision_processor.extract_contact_from_image(
+                        card_image, qr_data, timeout=vision_timeout
+                    )
                     
-                    # LLM Processing
-                    st.markdown("**🤖 Processing Contact Information**")
-                    with st.spinner("Structuring contact data..."):
-                        if use_llm and llm_processor and llm_processor.is_ollama_running():
-                            contact_data = llm_processor.extract_contact_info(raw_text, qr_data)
+                    if 'error' in contact_data:
+                        error_msg = contact_data.get('message', 'Unknown')
+                        st.error(f"❌ Vision processing error: {error_msg}")
+                        
+                        # Try to use QR code data as fallback
+                        if qr_data:
+                            st.warning("⚠️ Using QR code data as fallback...")
+                            contact_data = qr_to_contact_data(qr_data)
+                            st.success("✅ Contact info extracted from QR code!")
                         else:
-                            contact_data = llm_processor._fallback_extraction(raw_text, qr_data) if llm_processor else {}
+                            st.markdown(f'''
+                            <div style="
+                                background-color: #fff3cd;
+                                color: #856404;
+                                padding: 0.75rem;
+                                border-radius: 0.25rem;
+                                border-left: 4px solid #ffc107;
+                                margin: 0.5rem 0;
+                            ">
+                                💡 <strong>Tip:</strong> Install vision model:<br>
+                                <code>ollama pull {vision_model}</code>
+                            </div>
+                            ''', unsafe_allow_html=True)
+                            continue
+                    else:
+                        st.success("✅ Vision analysis complete!")
                 
                 if not contact_data or 'error' in contact_data:
                     st.warning("⚠️ Could not extract contact information")
                     continue
             
             # Step 5: Display Contact Preview
-            st.markdown("**Contact Information:**")
+            st.markdown("---")
+            st.markdown("### 👤 **Extracted Contact Information**")
             preview_col1, preview_col2 = st.columns([2, 1])
             
             with preview_col1:
@@ -546,10 +525,10 @@ def process_business_cards(uploaded_files, processing_mode, vision_model, vision
                 ''', unsafe_allow_html=True)
             
             with preview_col2:
-                # Option to edit contact data
-                with st.expander("✏️ Edit Contact Data"):
+                # Option to view raw contact data
+                with st.expander("✏️ **View Raw Data**", expanded=False):
+                    st.caption("JSON representation of extracted data:")
                     st.json(contact_data)
-                    st.info("Contact editing feature - click to view raw data")
             
             # Generate VCF
             vcf_string = vcf_generator.generate_vcf_string(contact_data)
@@ -582,85 +561,39 @@ def main():
     # Sidebar configuration
     st.sidebar.title("⚙️ Configuration")
     
-    # Processing Mode
-    st.sidebar.markdown("### 🔬 Processing Mode")
-    processing_mode = st.sidebar.radio(
-        "Extraction Method",
-        ["Vision (Recommended)", "OCR + LLM"],
-        help="Vision: Direct image analysis with vision LLM | OCR: Traditional text extraction + parsing"
+    # Vision Settings (always use Vision mode now)
+    st.sidebar.markdown("### 🔬 Vision Settings")
+    
+    vision_model = st.sidebar.selectbox(
+        "Vision Model",
+        ["llava:13b", "llama3.2-vision", "llava", "bakllava"],
+        index=0,  # llava:13b is default
+        help="Select the Ollama vision model (must support images)"
     )
     
-    # LLM Settings
-    st.sidebar.markdown("### LLM Settings")
+    vision_timeout = st.sidebar.slider(
+        "Vision Timeout (seconds)",
+        min_value=60,
+        max_value=300,
+        value=180,
+        step=30,
+        help="Time to wait for vision model response. Increase for slower systems or complex cards."
+    )
     
-    if processing_mode == "Vision (Recommended)":
-        vision_model = st.sidebar.selectbox(
-            "Vision Model",
-            ["llama3.2-vision", "llava", "llava:13b", "bakllava"],
-            help="Select the Ollama vision model (must support images)"
-        )
-        
-        vision_timeout = st.sidebar.slider(
-            "Vision Timeout (seconds)",
-            min_value=60,
-            max_value=300,
-            value=180,
-            step=30,
-            help="Time to wait for vision model response. Increase for slower systems or complex cards."
-        )
-        
-        st.sidebar.info("🎯 Vision models analyze images directly - more accurate!")
-        st.sidebar.caption(f"⏱️ Current timeout: {vision_timeout}s (~{vision_timeout//60} min)")
-        # Set defaults for OCR mode variables (not used in vision mode)
-        use_llm = False
-        ollama_model = "llama3.2"
-    else:
-        # Set defaults for vision mode variables (not used in OCR mode)
-        vision_model = "llama3.2-vision"
-        vision_timeout = 180
-        use_llm = st.sidebar.checkbox("Use Ollama LLM", value=True, 
-                                       help="Use local LLM for better extraction (requires Ollama)")
-        
-        ollama_model = st.sidebar.selectbox(
-            "Ollama Model",
-            ["llama3.2", "llama3.1", "llama3", "mistral", "phi3"],
-            help="Select the Ollama model to use"
-        )
+    st.sidebar.info("🎯 Vision models analyze images directly - more accurate!")
+    st.sidebar.caption(f"⏱️ Current timeout: {vision_timeout}s (~{vision_timeout//60} min)")
     
-    # OCR Settings (only for OCR mode)
-    if processing_mode == "OCR + LLM":
-        st.sidebar.markdown("### OCR Settings")
-        ocr_languages = st.sidebar.multiselect(
-            "OCR Languages",
-            options=['en', 'pt', 'es', 'fr', 'de', 'it'],
-            default=['en', 'pt'],
-            help="Select languages for text recognition"
-        )
-        
-        language_names = {
-            'en': 'English',
-            'pt': 'Portuguese',
-            'es': 'Spanish', 
-            'fr': 'French',
-            'de': 'German',
-            'it': 'Italian'
-        }
-        
-        selected_lang_names = [language_names.get(lang, lang) for lang in ocr_languages]
-        st.sidebar.info(f"Languages: {', '.join(selected_lang_names)}")
-    else:
-        ocr_languages = ['en', 'pt']  # Default for vision mode (not really used)
     
     # Card Detection Settings
     st.sidebar.markdown("### Detection Settings")
     
     detection_mode = st.sidebar.radio(
         "Detection Mode",
-        ["Improved Auto (Recommended)", "Automatic", "Manual - Single Card", "Manual - Grid Layout"],
+        ["Automatic", "Manual - Single Card", "Manual - Grid Layout"],
         help="Choose how to detect cards"
     )
     
-    if detection_mode == "Improved Auto (Recommended)":
+    if detection_mode == "Automatic":
         st.sidebar.success("✨ Document scanner algorithm")
         st.sidebar.info("Filters out QR codes & logos")
     
@@ -745,14 +678,8 @@ def main():
         # Process button
         if st.button("🚀 Process Business Cards", type="primary"):
             with st.spinner("Processing..."):
-                # Set defaults for parameters based on mode
-                _use_llm = use_llm if processing_mode == "OCR + LLM" else False
-                _ollama_model = ollama_model if processing_mode == "OCR + LLM" else "llama3.2"
-                _vision_model = vision_model if processing_mode == "Vision (Recommended)" else "llama3.2-vision"
-                _vision_timeout = vision_timeout if processing_mode == "Vision (Recommended)" else 180
-                
                 processed_cards = process_business_cards(
-                    uploaded_files, processing_mode, _vision_model, _vision_timeout, _use_llm, _ollama_model, ocr_languages,
+                    uploaded_files, vision_model, vision_timeout,
                     detection_mode, manual_grid_rows, manual_grid_cols,
                     min_card_percent, max_card_percent,
                     margin_top, margin_bottom, margin_left, margin_right
@@ -773,19 +700,10 @@ def main():
                     
                     with st.spinner(f"Re-processing card {idx+1}..."):
                         # Get current settings from sidebar (they're already in scope)
-                        _use_llm = use_llm if processing_mode == "OCR + LLM" else False
-                        _ollama_model = ollama_model if processing_mode == "OCR + LLM" else "llama3.2"
-                        _vision_model = vision_model if processing_mode == "Vision (Recommended)" else "llama3.2-vision"
-                        _vision_timeout = vision_timeout if processing_mode == "Vision (Recommended)" else 180
-                        
                         retry_result = process_single_card_retry(
                             card['card_image'],
-                            processing_mode,
-                            _vision_model,
-                            _vision_timeout,
-                            _use_llm,
-                            _ollama_model,
-                            ocr_languages
+                            vision_model,
+                            vision_timeout
                         )
                         
                         if retry_result:
@@ -812,11 +730,49 @@ def main():
             with export_col1:
                 include_vcf = st.checkbox("VCF (Outlook/Contacts)", value=True, help="vCard format for contact managers")
             with export_col2:
-                include_csv = st.checkbox("CSV", value=True, help="Spreadsheet format")
-            with export_col3:
                 include_excel = st.checkbox("Excel (XLSX)", value=True, help="Microsoft Excel format")
+            with export_col3:
+                outlook_csv = st.checkbox("Outlook Import CSV", value=True, help="Special CSV format for Outlook import")
             
-            outlook_csv = st.checkbox("Outlook Import CSV", value=False, help="Special CSV format for Outlook import")
+            # Set include_csv to False since we removed regular CSV option
+            include_csv = False
+            
+            # Outlook CSV format options
+            outlook_simplified = False
+            outlook_email_field = 'E-mail Address'
+            outlook_phone_field = 'Business Phone'
+            outlook_use_quotes = True
+            
+            if outlook_csv:
+                with st.expander("⚙️ Outlook CSV Options", expanded=False):
+                    outlook_simplified = st.checkbox(
+                        "Use Simplified Format", 
+                        value=False,
+                        help="Minimal fields only (First Name, Last Name, Company, Email, Phone) for maximum compatibility"
+                    )
+                    
+                    outlook_email_field = st.selectbox(
+                        "Email Field Name",
+                        options=['E-mail Address', 'Email Address', 'Email'],
+                        index=0,
+                        help="Field name for email column. Try different options if import fails."
+                    )
+                    
+                    outlook_phone_field = st.selectbox(
+                        "Phone Field Name",
+                        options=['Business Phone', 'Phone', 'Work Phone'],
+                        index=0,
+                        help="Field name for phone column. Try different options if import fails."
+                    )
+                    
+                    outlook_use_quotes = st.checkbox(
+                        "Quote Fields",
+                        value=True,
+                        help="Wrap all fields in quotes. Disable if Outlook has issues with quoted fields."
+                    )
+                    
+                    # Show diagnostic info
+                    st.caption("💡 **Tip:** If email/phone don't import, try different field names or simplified format.")
             
             # Prepare export data
             contacts = [card['contact_data'] for card in st.session_state.processed_cards]
@@ -831,101 +787,139 @@ def main():
             
             st.markdown("---")
             
-            # Download options
-            download_col1, download_col2 = st.columns(2)
+            # Individual Cards Management Section
+            st.markdown("### 📄 Individual Cards Management")
+            st.caption("💡 **Lock cards with good results** to prevent re-processing. **Retry** failed extractions individually.")
+            st.markdown("<br>", unsafe_allow_html=True)
             
-            with download_col1:
-                st.markdown("### 📄 Individual Cards Management")
-                st.info("💡 **Lock cards with good results** to prevent re-processing. **Retry** failed extractions individually.")
+            # Individual card management - Compact list format
+            for idx, card in enumerate(st.session_state.processed_cards):
+                is_locked = card.get('locked', False)
+                contact = card['contact_data']
                 
-                # Individual card management
-                for idx, card in enumerate(st.session_state.processed_cards):
-                    # Card header with lock status
-                    is_locked = card.get('locked', False)
+                # Get contact info
+                name = contact.get('fullName') or f"{contact.get('firstName', '')} {contact.get('lastName', '')}".strip() or "Unknown"
+                company = contact.get('company', '') or ''
+                email = contact.get('email', '') or ''
+                phone = contact.get('phone', '') or ''
+                
+                # Truncate long values for compact display
+                name_display = name[:30] + "..." if len(name) > 30 else name
+                company_display = company[:25] + "..." if len(company) > 25 else company
+                email_display = email[:25] + "..." if len(email) > 25 else email
+                phone_display = phone[:18] + "..." if len(phone) > 18 else phone
+                
+                # Compact list row layout
+                row_col1, row_col2, row_col3, row_col4, row_col5, row_col6 = st.columns([0.8, 2.5, 2, 2.5, 2, 3])
+                
+                with row_col1:
+                    # Lock status icon (smaller)
                     lock_icon = "🔒" if is_locked else "🔓"
-                    status_color = "green" if is_locked else "orange"
-                    
-                    st.markdown(f"**{lock_icon} Contact {idx+1}: {card['filename']}**")
-                    
-                    # Show contact preview
-                    contact = card['contact_data']
-                    name = contact.get('fullName') or f"{contact.get('firstName', '')} {contact.get('lastName', '')}".strip() or "Unknown"
-                    company = contact.get('company', '')
-                    email = contact.get('email', '')
-                    phone = contact.get('phone', '')
-                    
-                    preview_text = f"**{name}**"
+                    st.markdown(f'<div style="text-align: center; font-size: 16px;">{lock_icon}</div>', unsafe_allow_html=True)
+                
+                with row_col2:
+                    # Name
+                    st.markdown(f'<div style="font-weight: 600;">{name_display}</div>', unsafe_allow_html=True)
+                
+                with row_col3:
+                    # Company
                     if company:
-                        preview_text += f" | {company}"
+                        st.markdown(f'<div style="color: #666; font-size: 0.9em;">{company_display}</div>', unsafe_allow_html=True)
+                    else:
+                        st.markdown('<div style="color: #ccc;">—</div>', unsafe_allow_html=True)
+                
+                with row_col4:
+                    # Email
                     if email:
-                        preview_text += f" | ✉️ {email}"
+                        st.markdown(f'<div style="color: #666; font-size: 0.85em;">✉️ {email_display}</div>', unsafe_allow_html=True)
+                    else:
+                        st.markdown('<div style="color: #ccc;">—</div>', unsafe_allow_html=True)
+                
+                with row_col5:
+                    # Phone
                     if phone:
-                        preview_text += f" | ☎️ {phone}"
+                        st.markdown(f'<div style="color: #666; font-size: 0.85em;">☎️ {phone_display}</div>', unsafe_allow_html=True)
+                    else:
+                        st.markdown('<div style="color: #ccc;">—</div>', unsafe_allow_html=True)
+                
+                with row_col6:
+                    # Action buttons in compact row
+                    action_col1, action_col2, action_col3, action_col4 = st.columns([1, 1, 1, 1])
                     
-                    st.markdown(f'<div style="background-color: {"#d4edda" if is_locked else "#fff3cd"}; padding: 10px; border-radius: 5px; border-left: 4px solid {status_color};">{preview_text}</div>', unsafe_allow_html=True)
-                    
-                    # Controls row
-                    ctrl_col1, ctrl_col2, ctrl_col3, ctrl_col4 = st.columns([2, 2, 2, 2])
-                    
-                    # Lock/Unlock toggle
-                    with ctrl_col1:
-                        if st.button(f"{'🔓 Unlock' if is_locked else '🔒 Lock'}", 
-                                   key=f"lock_{idx}",
-                                   help=f"{'Unlock to allow re-processing' if is_locked else 'Lock to protect from changes'}"):
+                    with action_col1:
+                        # Lock/Unlock button (smaller)
+                        btn_label = "🔓" if is_locked else "🔒"
+                        if st.button(btn_label, key=f"lock_{idx}", 
+                                   help="Lock/Unlock" if not is_locked else "Lock/Unlock",
+                                   use_container_width=True):
                             st.session_state.processed_cards[idx]['locked'] = not is_locked
                             st.rerun()
                     
-                    # Retry button (only if unlocked)
-                    with ctrl_col2:
+                    with action_col2:
+                        # Retry button (smaller)
                         retry_disabled = is_locked
-                        if st.button("🔄 Retry", key=f"retry_{idx}", 
+                        if st.button("🔄", key=f"retry_{idx}", 
                                    disabled=retry_disabled,
-                                   help="Re-process this card with current settings" if not retry_disabled else "Unlock first to retry"):
-                            # Set retry flag
+                                   help="Retry" if not retry_disabled else "Unlock first",
+                                   use_container_width=True):
                             st.session_state[f'retry_card_{idx}'] = True
                             st.rerun()
                     
-                    # Download buttons
-                    with ctrl_col3:
+                    with action_col3:
+                        # VCF download (smaller)
                         if include_vcf:
                             st.download_button(
-                                label=f"📥 VCF",
+                                label="📥",
                                 data=card['vcf_content'],
                                 file_name=f"{card['filename']}.vcf",
                                 mime="text/vcard",
-                                key=f"vcf_{idx}_{card['filename']}"
+                                key=f"vcf_{idx}_{card['filename']}",
+                                help="Download VCF",
+                                use_container_width=True
                             )
                     
-                    with ctrl_col4:
-                        if include_csv:
-                            # Export single contact to CSV
-                            single_csv = export_processor.export_single_to_csv(card['contact_data'])
+                    with action_col4:
+                        # Outlook CSV download (smaller)
+                        if outlook_csv:
+                            if outlook_simplified:
+                                single_outlook_csv = export_processor.export_to_outlook_csv_simple(
+                                    [card['contact_data']],
+                                    email_field_name=outlook_email_field,
+                                    phone_field_name=outlook_phone_field,
+                                    use_quotes=outlook_use_quotes
+                                )
+                            else:
+                                single_outlook_csv = export_processor.export_to_outlook_csv(
+                                    [card['contact_data']],
+                                    email_field_name=outlook_email_field,
+                                    phone_field_name=outlook_phone_field
+                                )
                             st.download_button(
-                                label=f"📊 CSV",
-                                data=single_csv,
+                                label="📧",
+                                data=single_outlook_csv,
                                 file_name=f"{card['filename']}.csv",
                                 mime="text/csv",
-                                key=f"csv_{idx}_{card['filename']}"
+                                key=f"outlook_csv_{idx}_{card['filename']}",
+                                help="Download Outlook CSV",
+                                use_container_width=True
                             )
-                    
-                    if idx < len(st.session_state.processed_cards) - 1:
-                        st.markdown("---")
+                
+                # Add subtle divider between items
+                if idx < len(st.session_state.processed_cards) - 1:
+                    st.markdown('<hr style="margin: 8px 0; border: none; border-top: 1px solid #e0e0e0;">', unsafe_allow_html=True)
             
-            with download_col2:
-                st.markdown("### 📦 Bulk Downloads")
-                timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-                
-                # CSV Export
-                if include_csv:
-                    csv_data = export_processor.export_to_csv(contacts)
-                    st.download_button(
-                        label="📊 Download CSV",
-                        data=csv_data,
-                        file_name=f"contacts_{timestamp}.csv",
-                        mime="text/csv",
-                        help="Comma-separated values for Excel/Google Sheets"
-                    )
-                
+            # Clear visual separation
+            st.markdown("<br>", unsafe_allow_html=True)
+            st.divider()
+            st.markdown("<br>", unsafe_allow_html=True)
+            
+            # Bulk Downloads Section
+            st.markdown("### 📦 Bulk Downloads")
+            timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+            
+            bulk_col1, bulk_col2 = st.columns(2)
+            
+            with bulk_col1:
                 # Excel Export
                 if include_excel:
                     excel_data = export_processor.export_to_excel(contacts)
@@ -934,18 +928,8 @@ def main():
                         data=excel_data,
                         file_name=f"contacts_{timestamp}.xlsx",
                         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                        help="Microsoft Excel format with formatting"
-                    )
-                
-                # Outlook CSV Export
-                if outlook_csv:
-                    outlook_csv_data = export_processor.export_to_outlook_csv(contacts)
-                    st.download_button(
-                        label="📧 Download Outlook CSV",
-                        data=outlook_csv_data,
-                        file_name=f"outlook_import_{timestamp}.csv",
-                        mime="text/csv",
-                        help="Import this CSV directly into Outlook"
+                        help="Microsoft Excel format with formatting",
+                        use_container_width=True
                     )
                 
                 # Combined VCF
@@ -956,30 +940,70 @@ def main():
                         data=combined_vcf,
                         file_name=f"all_contacts_{timestamp}.vcf",
                         mime="text/vcard",
-                        help="All contacts in one VCF file"
+                        help="All contacts in one VCF file",
+                        use_container_width=True
                     )
+            
+            with bulk_col2:
+                # Outlook CSV Export
+                if outlook_csv:
+                    if outlook_simplified:
+                        outlook_csv_data = export_processor.export_to_outlook_csv_simple(
+                            contacts,
+                            email_field_name=outlook_email_field,
+                            phone_field_name=outlook_phone_field,
+                            use_quotes=outlook_use_quotes
+                        )
+                    else:
+                        outlook_csv_data = export_processor.export_to_outlook_csv(
+                            contacts,
+                            email_field_name=outlook_email_field,
+                            phone_field_name=outlook_phone_field
+                        )
+                    
+                    st.download_button(
+                        label="📧 Download Outlook CSV",
+                        data=outlook_csv_data,
+                        file_name=f"outlook_import_{timestamp}.csv",
+                        mime="text/csv",
+                        help="Import this CSV directly into Outlook",
+                        use_container_width=True
+                    )
+                    
+                    # Show diagnostic report if CSV validator is available
+                    try:
+                        from utils.csv_validator import CSVValidator
+                        validator = CSVValidator()
+                        diagnostic_report = validator.generate_diagnostic_report(outlook_csv_data)
+                        
+                        with st.expander("📋 CSV Diagnostic Report", expanded=False):
+                            st.code(diagnostic_report, language='text')
+                    except Exception as e:
+                        pass  # Skip diagnostic if validator fails
                 
                 # Complete Package (ZIP)
-                st.markdown("---")
-                st.markdown("**🎁 Complete Package:**")
-                vcf_files = [(f"{card['filename']}.vcf", card['vcf_content']) 
-                            for card in st.session_state.processed_cards]
-                
-                package_data = export_processor.create_export_package(
-                    contacts=contacts,
-                    vcf_files=vcf_files if include_vcf else [],
-                    include_csv=include_csv,
-                    include_excel=include_excel,
-                    include_outlook_csv=outlook_csv
-                )
-                
-                st.download_button(
-                    label="🎁 Download Complete Package (ZIP)",
-                    data=package_data,
-                    file_name=f"contacts_package_{timestamp}.zip",
-                    mime="application/zip",
-                    help="ZIP file with all selected formats"
-                )
+                if include_vcf or include_excel or outlook_csv:
+                    st.markdown("---")
+                    st.markdown("**🎁 Complete Package:**")
+                    vcf_files = [(f"{card['filename']}.vcf", card['vcf_content']) 
+                                for card in st.session_state.processed_cards]
+                    
+                    package_data = export_processor.create_export_package(
+                        contacts=contacts,
+                        vcf_files=vcf_files if include_vcf else [],
+                        include_csv=False,  # Regular CSV removed
+                        include_excel=include_excel,
+                        include_outlook_csv=outlook_csv
+                    )
+                    
+                    st.download_button(
+                        label="🎁 Download ZIP Package",
+                        data=package_data,
+                        file_name=f"contacts_package_{timestamp}.zip",
+                        mime="application/zip",
+                        help="ZIP file with all selected formats",
+                        use_container_width=True
+                    )
             
             # Summary
             st.markdown("### 📊 Processing Summary")
@@ -1034,16 +1058,13 @@ def main():
         # System status
         st.sidebar.markdown("### 📊 System Status")
         
-        # Check Ollama
-        llm_processor = LLMProcessor(model=ollama_model)
-        if llm_processor.is_ollama_running():
-            st.sidebar.success("✅ Ollama: Running")
-            models = llm_processor.get_available_models()
-            if models:
-                st.sidebar.info(f"Available models: {', '.join(models[:3])}")
+        # Check Ollama Vision Model
+        vision_check = VisionProcessor(model=vision_model)
+        if vision_check.check_ollama_status():
+            st.sidebar.success(f"✅ Ollama: Running ({vision_model})")
         else:
-            st.sidebar.warning("⚠️ Ollama: Not running")
-            st.sidebar.info("App will use fallback extraction")
+            st.sidebar.warning(f"⚠️ Ollama: Model '{vision_model}' not available")
+            st.sidebar.info(f"Install with: ollama pull {vision_model}")
         
         # Check QR Reader - always attempt
         qr_test = QRReader()
