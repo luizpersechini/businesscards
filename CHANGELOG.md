@@ -2,6 +2,21 @@
 
 All notable changes to the Business Card Scanner project will be documented in this file.
 
+# [Unreleased]
+
+### 🗂️ Scan History & Persistence
+
+#### Added
+- **History Manager** (`utils/history_manager.py`): Persists each processing run with metadata, original uploads, per-card artifacts, and export files.
+- **Scan History UI**: Filterable archive with summary view, ZIP download, reprocess, and delete actions.
+- **Automated Tests** (`tests/test_history_manager.py`): Covers metadata persistence, card updates, export tracking, and ZIP packaging.
+
+#### Changed
+- Processing pipeline now saves every run automatically and keeps history entries in sync when cards are retried or locked.
+- Streamlit interface exposes the archive with date/status filters and per-entry actions.
+
+---
+
 ## [1.3.0] - 2025-11-03
 
 ### 🎨 UI Improvements & Code Cleanup

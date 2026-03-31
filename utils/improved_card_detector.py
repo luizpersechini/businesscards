@@ -164,14 +164,23 @@ class ImprovedCardDetector:
                 detected_cards.append((card_warped, c))
                 used_regions.append((x, y, w, h))
         
-        # If no cards found with 4-point method, try simpler bounding box method
+        # If contour detection found fewer than 4 cards, try grid detection.
+        # Scanned pages with cards laid side-by-side often defeat contour
+        # methods because the gaps between cards are too thin or the
+        # backgrounds merge.
+        if len(detected_cards) < 4:
+            grid_cards = self._detect_grid_by_gaps(original)
+            if len(grid_cards) > len(detected_cards):
+                detected_cards = grid_cards
+
+        # If no cards found with either method, try simpler bounding box
         if len(detected_cards) == 0:
             detected_cards = self._fallback_detection(original)
-        
+
         # If still nothing, return whole image
         if len(detected_cards) == 0:
             detected_cards.append((original, None))
-        
+
         return detected_cards
     
     def _fallback_detection(self, image: np.ndarray) -> List[Tuple[np.ndarray, None]]:
@@ -247,6 +256,125 @@ class ImprovedCardDetector:
         
         return detected_cards
     
+    # ------------------------------------------------------------------
+    # Grid detection — designed for flatbed scans of multiple cards
+    # ------------------------------------------------------------------
+
+    def _detect_grid_by_gaps(self, image: np.ndarray) -> List[Tuple[np.ndarray, None]]:
+        """
+        Detect cards in grid layouts by finding horizontal and vertical
+        gaps (separators) using edge-density projection.  Works well for
+        flatbed scans where several cards are placed side by side.
+        """
+        h, w = image.shape[:2]
+
+        # Image must be large enough to contain multiple cards
+        if h < 400 or w < 400:
+            return []
+
+        gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+        edges = cv2.Canny(gray, 50, 150)
+
+        # --- Horizontal projection (find row separators) ---
+        h_proj = np.sum(edges, axis=1).astype(float)
+        # Very small smoothing kernel (3px) — just enough to remove
+        # single-pixel noise without smearing card-border spikes into gaps.
+        h_smooth = np.convolve(h_proj, np.ones(3) / 3, mode='same')
+        row_splits = self._find_gap_positions(h_smooth, h, cross_length=w)
+
+        # --- Vertical projection (find column separators) ---
+        v_proj = np.sum(edges, axis=0).astype(float)
+        v_smooth = np.convolve(v_proj, np.ones(3) / 3, mode='same')
+        col_splits = self._find_gap_positions(v_smooth, w, cross_length=h)
+
+        row_bounds = [0] + row_splits + [h]
+        col_bounds = [0] + col_splits + [w]
+
+        # Need at least a 2×1 or 1×2 grid
+        if len(row_bounds) < 3 and len(col_bounds) < 3:
+            return []
+
+        cards: List[Tuple[np.ndarray, None]] = []
+        image_area = h * w
+        min_cell = image_area * (self.min_area_percent / 100)
+
+        for r in range(len(row_bounds) - 1):
+            for c in range(len(col_bounds) - 1):
+                y1, y2 = row_bounds[r], row_bounds[r + 1]
+                x1, x2 = col_bounds[c], col_bounds[c + 1]
+
+                # Trim a small margin (gap residue / scanner artifacts)
+                margin = 8
+                y1, y2 = min(y1 + margin, y2), max(y2 - margin, y1 + 1)
+                x1, x2 = min(x1 + margin, x2), max(x2 - margin, x1 + 1)
+
+                cell = image[y1:y2, x1:x2]
+                cell_h, cell_w = cell.shape[:2]
+
+                if cell_h < 80 or cell_w < 80:
+                    continue
+
+                # Basic aspect-ratio sanity (very relaxed — grid cells
+                # may be slightly off from standard card proportions)
+                aspect = cell_w / cell_h
+                if not (0.4 < aspect < 2.8):
+                    continue
+
+                # Skip tiny slivers that are clearly not cards
+                if cell_h * cell_w < min_cell:
+                    continue
+
+                cards.append((cell, None))
+
+        return cards
+
+    @staticmethod
+    def _find_gap_positions(profile: np.ndarray, total_length: int,
+                            cross_length: int,
+                            min_gap_frac: float = 0.01) -> List[int]:
+        """
+        Walk an edge-density profile and return the centre position of
+        every low-density gap (= separator between cards).
+
+        Strategy: use a threshold that sits between the noise floor of
+        a real scanner gap and the content density of any card row.
+        """
+        if len(profile) == 0:
+            return []
+
+        # --- Adaptive threshold ---
+        # The 10th-percentile of the profile represents quiet regions
+        # (gaps + blank card areas).  The 75th-percentile represents
+        # content-rich rows.  A good threshold is halfway between them,
+        # capped at 5 % of cross_length to stay far below card content.
+        p10 = float(np.percentile(profile, 10))
+        p75 = float(np.percentile(profile, 75))
+        threshold = min((p10 + p75) / 2.0, cross_length * 0.05)
+        # Hard floor: never go above 5 % of cross_length
+        threshold = max(threshold, cross_length * 0.001)
+
+        min_gap_px = max(8, int(total_length * min_gap_frac))
+        edge_margin = int(total_length * 0.03)
+
+        in_gap = profile < threshold
+        gaps: List[int] = []
+        gap_start = None
+
+        for i, is_gap in enumerate(in_gap):
+            if is_gap and gap_start is None:
+                gap_start = i
+            elif not is_gap and gap_start is not None:
+                gap_end = i
+                gap_size = gap_end - gap_start
+                gap_center = (gap_start + gap_end) // 2
+
+                if (gap_size >= min_gap_px
+                        and edge_margin < gap_center < total_length - edge_margin):
+                    gaps.append(gap_center)
+                gap_start = None
+
+        return gaps
+
     def four_point_transform(self, image: np.ndarray, pts: np.ndarray) -> np.ndarray:
         """
         Apply four point perspective transform to get top-down view.

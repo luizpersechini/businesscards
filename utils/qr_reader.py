@@ -91,16 +91,42 @@ class QRReader:
         return results
     
     def _detect_with_pyzbar(self, image: np.ndarray) -> List[Dict]:
-        """Detect QR codes using pyzbar library."""
-        # Convert to grayscale for better detection
+        """Detect QR codes using pyzbar library with multiple preprocessing strategies."""
         if len(image.shape) == 3:
             gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
         else:
-            gray = image
-        
-        # Detect QR codes
-        detected_codes = pyzbar.decode(gray)
-        
+            gray = image.copy()
+
+        # Build list of image variants to try — more chances of detection
+        candidates = [gray]
+
+        # Upscale if image is small (QR codes need enough pixels)
+        h, w = gray.shape[:2]
+        if max(h, w) < 800:
+            scale = 800 / max(h, w)
+            upscaled = cv2.resize(gray, None, fx=scale, fy=scale, interpolation=cv2.INTER_CUBIC)
+            candidates.append(upscaled)
+
+        # CLAHE contrast enhancement
+        clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+        candidates.append(clahe.apply(gray))
+
+        # Adaptive threshold
+        candidates.append(cv2.adaptiveThreshold(
+            gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 51, 10
+        ))
+
+        # Sharpening kernel
+        kernel = np.array([[0, -1, 0], [-1, 5, -1], [0, -1, 0]])
+        candidates.append(cv2.filter2D(gray, -1, kernel))
+
+        detected_codes = []
+        for candidate in candidates:
+            codes = pyzbar.decode(candidate)
+            if codes:
+                detected_codes = codes
+                break
+
         results = []
         for code in detected_codes:
             # Decode data
@@ -129,15 +155,21 @@ class QRReader:
         if len(image.shape) == 3:
             gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
         else:
-            gray = image
-        
+            gray = image.copy()
+
         results = []
-        
-        # Try multiple preprocessing approaches
-        images_to_try = [
-            gray,
-            self.enhance_for_qr_detection(image)
-        ]
+
+        # Build preprocessing variants (same as pyzbar approach for consistency)
+        images_to_try = [gray]
+
+        h, w = gray.shape[:2]
+        if max(h, w) < 800:
+            scale = 800 / max(h, w)
+            images_to_try.append(cv2.resize(gray, None, fx=scale, fy=scale, interpolation=cv2.INTER_CUBIC))
+
+        clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+        images_to_try.append(clahe.apply(gray))
+        images_to_try.append(self.enhance_for_qr_detection(image))
         
         for img in images_to_try:
             try:
@@ -317,17 +349,19 @@ class QRReader:
     def has_qr_code(self, image: np.ndarray) -> bool:
         """
         Quick check if image contains any QR codes.
-        
+        Uses all available detectors (pyzbar + OpenCV fallback).
+
         Args:
             image: Input image
-            
+
         Returns:
             True if at least one QR code is detected
         """
-        if not PYZBAR_AVAILABLE:
+        try:
+            results = self.detect_and_decode(image)
+            return len(results) > 0
+        except Exception:
             return False
-        results = self.detect_and_decode(image)
-        return len(results) > 0
     
     def is_available(self) -> bool:
         """
