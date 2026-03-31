@@ -137,6 +137,13 @@ def initialize_session_state():
         st.session_state.history_recorded_exports = set()
     if 'ollama_preload_started' not in st.session_state:
         st.session_state.ollama_preload_started = False
+    # Outlook / MS Graph two-step auth flow
+    if 'outlook_auth_flow' not in st.session_state:
+        st.session_state.outlook_auth_flow = None    # pending MSAL device flow dict
+    if 'outlook_auth_code' not in st.session_state:
+        st.session_state.outlook_auth_code = None    # user_code to display
+    if 'outlook_auth_uri' not in st.session_state:
+        st.session_state.outlook_auth_uri = None     # verification_uri
 
 
 def load_image(uploaded_file):
@@ -1372,21 +1379,91 @@ def main():
 
     if ms_graph_manager.is_configured:
         if ms_graph_manager.is_authenticated:
-            st.sidebar.success("✅ Connected to Outlook")
+            me = ms_graph_manager.get_me()
+            user_label = me.get("displayName") or me.get("mail", "user") if me else "user"
+            st.sidebar.success(f"✅ Connected as {user_label}")
+            if st.sidebar.button("🔓 Disconnect Outlook", key="btn_outlook_disconnect"):
+                ms_graph_manager.logout()
+                st.session_state.outlook_auth_flow = None
+                st.session_state.outlook_auth_code = None
+                st.session_state.outlook_auth_uri = None
+                st.rerun()
         else:
-            if st.sidebar.button("🔑 Connect to Outlook"):
-                with st.spinner("Authenticating..."):
-                    auth_result = ms_graph_manager.authenticate(
-                        callback=lambda code, uri, msg: st.sidebar.info(
-                            f"Visit {uri} and enter code: **{code}**"
+            # ── Step 1: initiate device code flow ─────────────────────────
+            if st.session_state.outlook_auth_flow is None:
+                if st.sidebar.button("🔑 Connect to Outlook", key="btn_outlook_connect"):
+                    try:
+                        app_obj = ms_graph_manager._get_msal_app()
+                        flow = app_obj.initiate_device_flow(
+                            scopes=ms_graph_manager.SCOPES
                         )
-                    )
-                    if auth_result["success"]:
-                        st.sidebar.success(auth_result["message"])
+                        if "user_code" in flow:
+                            st.session_state.outlook_auth_flow = flow
+                            st.session_state.outlook_auth_code = flow["user_code"]
+                            st.session_state.outlook_auth_uri = flow.get(
+                                "verification_uri", "https://microsoft.com/devicelogin"
+                            )
+                        else:
+                            st.sidebar.error(flow.get("error_description", "Failed to start auth flow"))
+                        st.rerun()
+                    except Exception as e:
+                        st.sidebar.error(f"Error: {e}")
+            else:
+                # ── Step 2: show code, wait for user, then confirm ─────────
+                code = st.session_state.outlook_auth_code
+                uri  = st.session_state.outlook_auth_uri
+                st.sidebar.markdown(
+                    f"**1.** Open [{uri}]({uri})  \n"
+                    f"**2.** Enter this code:"
+                )
+                st.sidebar.code(code, language=None)
+                col1, col2 = st.sidebar.columns(2)
+                with col1:
+                    confirm = st.button("✅ Done", key="btn_outlook_confirm",
+                                        help="Click after entering the code in your browser",
+                                        use_container_width=True)
+                with col2:
+                    cancel = st.button("✖ Cancel", key="btn_outlook_cancel",
+                                       use_container_width=True)
+
+                if cancel:
+                    st.session_state.outlook_auth_flow = None
+                    st.session_state.outlook_auth_code = None
+                    st.session_state.outlook_auth_uri = None
+                    st.rerun()
+
+                if confirm:
+                    with st.spinner("Verifying sign-in…"):
+                        try:
+                            app_obj = ms_graph_manager._get_msal_app()
+                            result = app_obj.acquire_token_by_device_flow(
+                                st.session_state.outlook_auth_flow
+                            )
+                        except Exception as e:
+                            result = {"error_description": str(e)}
+
+                    if "access_token" in result:
+                        import time as _time
+                        ms_graph_manager._access_token = result["access_token"]
+                        ms_graph_manager._token_expires_at = (
+                            _time.time() + result.get("expires_in", 3600)
+                        )
+                        ms_graph_manager._account = result.get("id_token_claims", {})
+                        ms_graph_manager._save_token_cache()
+                        st.session_state.outlook_auth_flow = None
+                        st.session_state.outlook_auth_code = None
+                        st.session_state.outlook_auth_uri = None
+                        st.sidebar.success("✅ Outlook connected!")
+                        st.rerun()
                     else:
-                        st.sidebar.error(auth_result["message"])
+                        err = result.get("error_description", "Authentication failed")
+                        st.sidebar.error(err)
+                        if "expired" in err.lower() or "timeout" in err.lower():
+                            st.session_state.outlook_auth_flow = None
+                            st.session_state.outlook_auth_code = None
+                            st.session_state.outlook_auth_uri = None
     else:
-        st.sidebar.info("Set MS_GRAPH_CLIENT_ID env var to enable Outlook sync")
+        st.sidebar.caption("💡 Set MS_GRAPH_CLIENT_ID env var to enable direct Outlook sync")
 
     relaunch_wrappers = handle_history_relaunch(
         vision_model,
