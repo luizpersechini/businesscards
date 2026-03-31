@@ -217,24 +217,53 @@ class VCFGenerator:
         
         return filename
     
+    # Known placeholder strings returned by LLMs when extraction fails.
+    # Any value matching these patterns is ignored for filename generation.
+    _PLACEHOLDER_FRAGMENTS = [
+        "use this if you can't",
+        "complete name",
+        "company or organization",
+        "job title",
+        "email address",
+        "primary phone",
+        "mobile/cell",
+        "street address",
+        "any other relevant",
+    ]
+
+    @classmethod
+    def _is_placeholder(cls, value: str) -> bool:
+        """Return True if value looks like an LLM schema placeholder, not real data."""
+        if not value or not isinstance(value, str):
+            return True
+        v = value.lower()
+        # Placeholder strings tend to be long and contain parentheses
+        if any(frag in v for frag in cls._PLACEHOLDER_FRAGMENTS):
+            return True
+        # Real names are rarely longer than 60 chars
+        if len(value) > 60:
+            return True
+        return False
+
     def contact_to_filename(self, contact_data: Dict) -> str:
         """
         Generate a safe filename from contact data.
-        
+
         Args:
             contact_data: Dictionary with contact information
-            
+
         Returns:
             Safe filename string (without extension)
         """
-        # Try to use name
-        if contact_data.get('fullName'):
+        # Try to use name — skip if it looks like a placeholder
+        if contact_data.get('fullName') and not self._is_placeholder(contact_data['fullName']):
             name = contact_data['fullName']
-        elif contact_data.get('firstName') or contact_data.get('lastName'):
+        elif (contact_data.get('firstName') or contact_data.get('lastName')) and \
+             not self._is_placeholder(contact_data.get('firstName', '') + contact_data.get('lastName', '')):
             first = contact_data.get('firstName', '')
             last = contact_data.get('lastName', '')
             name = f"{first}_{last}".strip('_')
-        elif contact_data.get('email'):
+        elif contact_data.get('email') and not self._is_placeholder(contact_data.get('email', '')):
             name = contact_data['email'].split('@')[0]
         else:
             name = f"contact_{datetime.now().strftime('%Y%m%d_%H%M%S')}"

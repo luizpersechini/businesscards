@@ -1295,9 +1295,15 @@ def main():
             "Preferred Provider",
             provider_names,
             index=0,
+            key="widget_provider_select",
             help="Local providers have priority. Cloud providers are fallback."
         )
-        selected_provider = ProviderType(selected_provider_name)
+        # Defensive: selectbox can return a stale integer index from session
+        # state after a widget tree change. Always coerce to string first.
+        try:
+            selected_provider = ProviderType(str(selected_provider_name))
+        except ValueError:
+            selected_provider = ProviderType(provider_names[0])
         st.session_state.selected_provider = selected_provider  # Store in session
     else:
         selected_provider = None
