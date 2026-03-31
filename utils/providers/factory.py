@@ -42,7 +42,7 @@ class ProviderFactory:
     DEFAULT_CONFIGS = [
         ProviderConfig(
             provider_type=ProviderType.OLLAMA,
-            model_name="llama3.2-vision",
+            model_name="glm-ocr",
             api_url="http://localhost:11434",
             timeout=300,  # 5 min — first load can be slow on CPU/low VRAM
             priority=0,

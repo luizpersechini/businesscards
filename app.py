@@ -953,14 +953,14 @@ def process_business_cards(uploaded_files, vision_model, vision_timeout, detecti
                 if len(detected_cards) < 4:
                     h_img, w_img = cv_image.shape[:2]
                     aspect = w_img / h_img if h_img > 0 else 1.0
-                    # Portrait (tall scan): likely 4 rows × 2 cols
-                    # Landscape (wide scan): likely 2 rows × 4 cols
-                    if aspect < 0.9:
+                    # Infer grid from aspect ratio.
+                    # Portrait (tall): 4 rows × 2 cols
+                    # Square / near-square: 4 rows × 2 cols (most common scan layout)
+                    # Landscape (wide): 2 rows × 4 cols
+                    if aspect < 1.4:
                         inferred_rows, inferred_cols = 4, 2
-                    elif aspect > 1.4:
-                        inferred_rows, inferred_cols = 2, 4
                     else:
-                        inferred_rows, inferred_cols = 2, 2
+                        inferred_rows, inferred_cols = 2, 4
 
                     grid_cards = split_image_grid(cv_image, inferred_rows, inferred_cols)
                     if len(grid_cards) > len(detected_cards):

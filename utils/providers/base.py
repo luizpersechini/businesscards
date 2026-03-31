@@ -153,40 +153,54 @@ Analyze this business card image carefully and extract all visible contact infor
 
 """
 
-        prompt += """Extract and return ONLY a valid JSON object with these fields. Use null for missing information:
+        prompt += """Extract all contact information from this business card image and return it as a JSON object.
 
+EXAMPLE — for a card showing "Maria Santos | Diretora | Banco Brasil | maria@bb.com.br | +55 11 3456-7890":
 {
-  "firstName": "first name only",
-  "lastName": "last name only",
-  "fullName": "complete name (use this if you can't split first/last)",
-  "title": "job title (e.g., CEO, Manager, Director, Engineer)",
-  "company": "company or organization name",
-  "email": "email address",
-  "phone": "primary phone with country code if present",
-  "mobile": "mobile/cell phone if different from main phone",
-  "address": "street address",
-  "city": "city name",
-  "state": "state or province",
-  "zip": "postal/ZIP code",
-  "country": "country name",
-  "website": "website URL",
-  "linkedin": "LinkedIn URL",
-  "notes": "any other relevant info"
+  "firstName": "Maria",
+  "lastName": "Santos",
+  "fullName": null,
+  "title": "Diretora",
+  "company": "Banco Brasil",
+  "email": "maria@bb.com.br",
+  "phone": "+55 11 3456-7890",
+  "mobile": null,
+  "address": null,
+  "city": null,
+  "state": null,
+  "zip": null,
+  "country": "Brasil",
+  "website": null,
+  "linkedin": null,
+  "notes": null
 }
 
-CRITICAL INSTRUCTIONS:
-1. Return ONLY valid JSON - no explanations, no markdown, no extra text
-2. Look at the image carefully - read ALL visible text
-3. Portuguese titles: "Presidente" = President, "Diretor" = Director, "Gerente" = Manager
-4. Phone format: Keep country code (+55 for Brazil), format as +55 (XX) XXXXX-XXXX
-5. Company identifiers: Ltda, S.A., Inc, LLC, ministry names
-6. Addresses: Look for Rua, Avenida, Av., Street, numbers, CEP, ZIP
-7. If QR code data exists, use it as primary source and fill gaps from image
-8. Handle rotated or skewed text as best as possible
-9. Multiple names may indicate full name (e.g., "João da Silva Santos")
-10. Look for social media icons and URLs (LinkedIn, Facebook, Twitter)
+Now read EVERY piece of text visible in the image and fill in this JSON:
+{
+  "firstName": null,
+  "lastName": null,
+  "fullName": null,
+  "title": null,
+  "company": null,
+  "email": null,
+  "phone": null,
+  "mobile": null,
+  "address": null,
+  "city": null,
+  "state": null,
+  "zip": null,
+  "country": null,
+  "website": null,
+  "linkedin": null,
+  "notes": null
+}
 
-Return ONLY the JSON object, starting with { and ending with }. No markdown code blocks."""
+Rules:
+- Use null for any field not visible on the card — never invent or guess values
+- firstName + lastName OR fullName (not both)
+- Keep phone numbers exactly as printed; add country code only if shown (+55 for Brazil)
+- Portuguese job titles: Gerente=Manager, Diretor=Director, Presidente=President
+- Return ONLY the JSON object. No markdown, no explanation, no extra text."""
         return prompt
 
     @staticmethod

@@ -164,14 +164,20 @@ class ImprovedCardDetector:
                 detected_cards.append((card_warped, c))
                 used_regions.append((x, y, w, h))
         
-        # If contour detection found fewer than 4 cards, try grid detection.
-        # Scanned pages with cards laid side-by-side often defeat contour
-        # methods because the gaps between cards are too thin or the
-        # backgrounds merge.
+        # If contour detection found fewer than 4 cards, try edge-density
+        # grid detection.  Scanned pages with cards in a sleeve often defeat
+        # contour methods because the sleeve gaps merge with card edges.
         if len(detected_cards) < 4:
             grid_cards = self._detect_grid_by_gaps(original)
             if len(grid_cards) > len(detected_cards):
                 detected_cards = grid_cards
+
+        # If both methods still found fewer than 4 cards, try a pure
+        # aspect-ratio-based uniform grid split as a reliable last resort.
+        if len(detected_cards) < 4:
+            uniform_cards = self._uniform_grid_split(original)
+            if len(uniform_cards) > len(detected_cards):
+                detected_cards = uniform_cards
 
         # If no cards found with either method, try simpler bounding box
         if len(detected_cards) == 0:
@@ -182,6 +188,40 @@ class ImprovedCardDetector:
             detected_cards.append((original, None))
 
         return detected_cards
+
+    def _uniform_grid_split(self, image: np.ndarray) -> List[Tuple[np.ndarray, None]]:
+        """
+        Last-resort fallback: split the image into a uniform grid inferred
+        from its aspect ratio.  Works reliably for flatbed scans and phone
+        photos of card collections laid on a flat surface.
+
+        Aspect heuristic (mirrors app.py logic):
+          portrait  (w/h < 1.4) → 4 rows × 2 cols  (most common layout)
+          landscape (w/h ≥ 1.4) → 2 rows × 4 cols
+        """
+        h, w = image.shape[:2]
+        aspect = w / h if h > 0 else 1.0
+
+        if aspect < 1.4:
+            rows, cols = 4, 2
+        else:
+            rows, cols = 2, 4
+
+        cell_h = h // rows
+        cell_w = w // cols
+        cards: List[Tuple[np.ndarray, None]] = []
+
+        for r in range(rows):
+            for c in range(cols):
+                y1 = r * cell_h
+                y2 = (r + 1) * cell_h if r < rows - 1 else h
+                x1 = c * cell_w
+                x2 = (c + 1) * cell_w if c < cols - 1 else w
+                cell = image[y1:y2, x1:x2]
+                if cell.shape[0] > 50 and cell.shape[1] > 50:
+                    cards.append((cell, None))
+
+        return cards
     
     def _fallback_detection(self, image: np.ndarray) -> List[Tuple[np.ndarray, None]]:
         """
