@@ -155,27 +155,7 @@ Analyze this business card image carefully and extract all visible contact infor
 
         prompt += """Extract all contact information from this business card image and return it as a JSON object.
 
-EXAMPLE — for a card showing "Maria Santos | Diretora | Banco Brasil | maria@bb.com.br | +55 11 3456-7890":
-{
-  "firstName": "Maria",
-  "lastName": "Santos",
-  "fullName": null,
-  "title": "Diretora",
-  "company": "Banco Brasil",
-  "email": "maria@bb.com.br",
-  "phone": "+55 11 3456-7890",
-  "mobile": null,
-  "address": null,
-  "city": null,
-  "state": null,
-  "zip": null,
-  "country": "Brasil",
-  "website": null,
-  "linkedin": null,
-  "notes": null
-}
-
-Now read EVERY piece of text visible in the image and fill in this JSON:
+Read EVERY piece of text visible in the image and fill in this JSON with the actual values from the card:
 {
   "firstName": null,
   "lastName": null,
@@ -196,7 +176,8 @@ Now read EVERY piece of text visible in the image and fill in this JSON:
 }
 
 Rules:
-- Use null for any field not visible on the card — never invent or guess values
+- Replace null ONLY with values you can actually read from the card image — never invent or guess values
+- Leave as null any field not visible on the card
 - firstName + lastName OR fullName (not both)
 - Keep phone numbers exactly as printed; add country code only if shown (+55 for Brazil)
 - Portuguese job titles: Gerente=Manager, Diretor=Director, Presidente=President

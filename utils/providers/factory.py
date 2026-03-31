@@ -208,8 +208,14 @@ class ProviderFactory:
             if result.error is None and result.contact.has_minimum_data():
                 return result
 
-            errors.append(f"{config.provider_type.value}: {result.error}")
-            logger.warning(f"Provider {config.provider_type.value} failed: {result.error}")
+            # Build a descriptive error — never log bare "None"
+            fail_reason = (
+                result.error
+                if result.error
+                else "extracted no usable contact data"
+            )
+            errors.append(f"{config.provider_type.value}: {fail_reason}")
+            logger.warning(f"Provider {config.provider_type.value} failed: {fail_reason}")
 
         # All providers failed
         return ScanResult(
