@@ -307,6 +307,28 @@ class OllamaVisionProvider(VisionProvider):
                 consumed.add(i)
                 break
 
+        # ── Compile shared regexes ────────────────────────────────────────
+        corp_re = re.compile(
+            r'\b(ltda|ltd|s\.?a\.?|inc\.?|corp\.?|group|grupo|banco|bank'
+            r'|consultoria|consulting|solucoes|solutions|tecnologia|technology'
+            r'|services|serviços|sistemas|systems|network|networks|global'
+            r'|associados|associates|partners|parceiros|agro|agência|agency'
+            r'|financeira|finance|seguros|insurance|saúde|health|clinic|clínica'
+            r'|construtora|construção|construction|imóveis|imobiliária|realty)\b',
+            re.I
+        )
+        title_kw = re.compile(
+            r'\b(gerente|diretor|director|manager|ceo|cto|cfo|coo|vp|vice.president'
+            r'|presidente|coordinator|coordenador|engenheiro|engineer'
+            r'|analista|analyst|consultor|consultant|vendas|sales|técnico|technician'
+            r'|representative|representante|supervisor|especialista|specialist'
+            r'|executive|executiv|account|associate|assistente|assistant'
+            r'|contador|accountant|advogado|lawyer|médico|doctor|enfermeiro)\b',
+            re.I
+        )
+        # Brazilian ZIP (CEP): NNNNN-NNN — must NOT be treated as a phone number
+        cep_re = re.compile(r'^\d{5}-\d{3}$')
+
         # ── Phone numbers ──────────────────────────────────────────────────
         # Match common formats: +55 11 99999-9999, (11) 3456-7890, 555-1234, etc.
         phone_re = re.compile(
@@ -323,45 +345,61 @@ class OllamaVisionProvider(VisionProvider):
             for m in phone_re.finditer(line):
                 candidate = m.group(0).strip()
                 # Must have at least 7 digits
-                if len(re.sub(r'\D', '', candidate)) >= 7:
-                    phones_found.append(candidate)
-                    consumed.add(i)
+                if len(re.sub(r'\D', '', candidate)) < 7:
+                    continue
+                # Skip Brazilian ZIP codes (NNNNN-NNN, exactly 8 digits, no + or brackets)
+                if cep_re.match(candidate):
+                    continue
+                # Also skip bare 8-digit sequences that look like CEP (no country/area prefix)
+                digits_only = re.sub(r'\D', '', candidate)
+                if len(digits_only) == 8 and not candidate.startswith(('+', '(')):
+                    continue
+                phones_found.append(candidate)
+                consumed.add(i)
         if phones_found:
             contact["phone"] = phones_found[0]
             if len(phones_found) > 1:
                 contact["mobile"] = phones_found[1]
 
+        # ── Store ZIP if found (look for CEP-format lines) ────────────────
+        for i, line in enumerate(lines):
+            if i in consumed:
+                continue
+            if cep_re.search(line.strip()):
+                contact["zip"] = line.strip()
+                consumed.add(i)
+                break
+
         # ── Name (first "person name" looking line) ────────────────────────
-        name_re = re.compile(r'^[A-ZÁÉÍÓÚÀÂÊÔÃÕÜÇÑ][a-záéíóúàâêôãõüçñA-Z]'
-                             r'(?:[\w\'-]* ?){0,6}$')
+        # Pre-mark company-keyword lines so they don't get mistaken for names.
+        # (They'll still be available for company detection since we don't add
+        # them to `consumed` here — we just skip them for name detection.)
         for i, line in enumerate(lines):
             if i in consumed:
                 continue
             words = line.split()
-            # Candidate: 2-5 words, no digits, no special characters (except hyphen/apostrophe)
-            if 2 <= len(words) <= 5:
-                if re.search(r'\d', line):
-                    continue
-                if re.search(r'[@#&/\\|<>{}[\]()=+*%$!^~;]', line):
-                    continue
-                # Must start with uppercase
-                if words[0][0].isupper():
-                    full_name = line
-                    contact["firstName"] = words[0]
-                    contact["lastName"] = ' '.join(words[1:])
-                    consumed.add(i)
-                    break
+            # Candidate: 2-5 words, no digits, no special characters
+            if not (2 <= len(words) <= 5):
+                continue
+            if re.search(r'\d', line):
+                continue
+            if re.search(r'[@#&/\\|<>{}[\]()=+*%$!^~;]', line):
+                continue
+            # Skip all-caps lines — those are usually logos or department headers
+            if line == line.upper() and len(line) > 3:
+                continue
+            # Skip lines that contain company or title keywords — those will be
+            # handled by company / title detection below
+            if corp_re.search(line) or title_kw.search(line):
+                continue
+            # Must start with uppercase
+            if words[0] and words[0][0].isupper():
+                contact["firstName"] = words[0]
+                contact["lastName"] = ' '.join(words[1:])
+                consumed.add(i)
+                break
 
         # ── Title (job role keywords) ──────────────────────────────────────
-        title_kw = re.compile(
-            r'\b(gerente|diretor|director|manager|ceo|cto|cfo|coo|vp|vice.president'
-            r'|presidente|coordinator|coordenador|engenheiro|engineer'
-            r'|analista|analyst|consultor|consultant|vendas|sales|técnico|technician'
-            r'|representative|representante|supervisor|especialista|specialist'
-            r'|executive|executiv|account|associate|assistente|assistant'
-            r'|contador|accountant|advogado|lawyer|médico|doctor|enfermeiro)\b',
-            re.I
-        )
         for i, line in enumerate(lines):
             if i in consumed:
                 continue
@@ -370,16 +408,7 @@ class OllamaVisionProvider(VisionProvider):
                 consumed.add(i)
                 break
 
-        # ── Company ────────────────────────────────────────────────────────
-        corp_re = re.compile(
-            r'\b(ltda|ltd|s\.?a\.?|inc\.?|corp\.?|group|grupo|banco|bank'
-            r'|consultoria|consulting|solucoes|solutions|tecnologia|technology'
-            r'|services|serviços|sistemas|systems|network|networks|global'
-            r'|associados|associates|partners|parceiros|agro|agência|agency'
-            r'|financeira|finance|seguros|insurance|saúde|health|clinic|clínica'
-            r'|construtora|construção|construction|imóveis|imobiliária|realty)\b',
-            re.I
-        )
+        # ── Company (keyword match first, then fallback) ────────────────────
         for i, line in enumerate(lines):
             if i in consumed:
                 continue
@@ -388,15 +417,17 @@ class OllamaVisionProvider(VisionProvider):
                 consumed.add(i)
                 break
 
-        # If no company found by keyword, use the second unconsumed non-phone/email line
-        # (often the company name is just a proper noun with no suffix)
+        # Fallback: first unconsumed multi-word capitalized line that isn't a
+        # title phrase.  Skip all-caps lines (logos) and title-keyword lines.
         if not contact["company"]:
             candidates = [
                 lines[i] for i in range(len(lines))
                 if i not in consumed
                 and not re.search(r'\d', lines[i])
                 and len(lines[i].split()) >= 2
-                and lines[i][0].isupper()
+                and lines[i] and lines[i][0].isupper()
+                and not (lines[i] == lines[i].upper() and len(lines[i]) > 3)
+                and not title_kw.search(lines[i])
             ]
             if candidates:
                 contact["company"] = candidates[0]
