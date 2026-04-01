@@ -34,19 +34,28 @@ class QRReader:
     def __init__(self, use_opencv_fallback: bool = True):
         """
         Initialize the QR reader.
-        
+
         Args:
-            use_opencv_fallback: Use OpenCV QR detector if pyzbar fails
+            use_opencv_fallback: Use OpenCV QR detector(s) if pyzbar fails
         """
         self.use_opencv_fallback = use_opencv_fallback
         self.opencv_detector = None
-        
+        self.opencv_aruco_detector = None   # more robust ArUco-based detector
+
         if self.use_opencv_fallback:
             try:
                 self.opencv_detector = cv2.QRCodeDetector()
                 print("✓ OpenCV QR detector initialized as fallback")
-            except:
+            except Exception:
                 print("⚠ OpenCV QR detector not available")
+
+            # QRCodeDetectorAruco (cv2 ≥ 4.8) handles skew, small size, and
+            # coloured QR codes better than the basic detector.
+            try:
+                self.opencv_aruco_detector = cv2.QRCodeDetectorAruco()
+                print("✓ OpenCV ArUco QR detector initialized")
+            except Exception:
+                pass   # Not fatal — basic detector is still available
     
     def detect_and_decode(self, image: np.ndarray) -> List[Dict]:
         """
@@ -66,7 +75,7 @@ class QRReader:
         """
         results = []
         
-        # Try pyzbar first (better detection)
+        # Try pyzbar first (best overall detection rate)
         if PYZBAR_AVAILABLE:
             try:
                 results = self._detect_with_pyzbar(image)
@@ -74,11 +83,20 @@ class QRReader:
                     return results
             except Exception as e:
                 print(f"⚠ pyzbar detection failed: {e}")
-        
-        # Fall back to OpenCV if enabled and pyzbar didn't find anything
+
+        # ArUco-based detector — more robust for coloured / skewed QR codes
+        if self.use_opencv_fallback and self.opencv_aruco_detector is not None:
+            try:
+                results = self._detect_with_opencv(image, detector=self.opencv_aruco_detector)
+                if results:
+                    return results
+            except Exception as e:
+                print(f"⚠ OpenCV ArUco QR detection failed: {e}")
+
+        # Basic OpenCV detector as final fallback
         if self.use_opencv_fallback and self.opencv_detector is not None:
             try:
-                results = self._detect_with_opencv(image)
+                results = self._detect_with_opencv(image, detector=self.opencv_detector)
                 if results:
                     return results
             except Exception as e:
@@ -90,35 +108,87 @@ class QRReader:
         
         return results
     
-    def _detect_with_pyzbar(self, image: np.ndarray) -> List[Dict]:
-        """Detect QR codes using pyzbar library with multiple preprocessing strategies."""
+    @staticmethod
+    def _build_preprocessing_variants(image: np.ndarray) -> List[np.ndarray]:
+        """
+        Build a list of preprocessed image variants to maximise QR detection.
+
+        Handles:
+        - Small/low-res crops (upscale to 1200px)
+        - Low contrast (CLAHE, histogram equalisation)
+        - Coloured / warm-tinted QR codes (extract individual colour channels;
+          blue channel gives highest contrast for brown/gold/red QR modules)
+        - Dirty or noisy prints (adaptive threshold, Otsu, morphological cleanup)
+        - Inverted codes (light modules on dark background)
+        """
+        candidates: List[np.ndarray] = []
+
+        # ── Grayscale base ────────────────────────────────────────────────
         if len(image.shape) == 3:
             gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
         else:
             gray = image.copy()
 
-        # Build list of image variants to try — more chances of detection
-        candidates = [gray]
+        candidates.append(gray)
 
-        # Upscale if image is small (QR codes need enough pixels)
+        # ── Upscale small images ──────────────────────────────────────────
+        # QR decoders need ≥ ~4 px per module; upscale if image is small.
         h, w = gray.shape[:2]
-        if max(h, w) < 800:
-            scale = 800 / max(h, w)
-            upscaled = cv2.resize(gray, None, fx=scale, fy=scale, interpolation=cv2.INTER_CUBIC)
-            candidates.append(upscaled)
+        target = 1200   # px on the longest edge
+        if max(h, w) < target:
+            scale = target / max(h, w)
+            up = cv2.resize(gray, None, fx=scale, fy=scale,
+                            interpolation=cv2.INTER_CUBIC)
+            candidates.append(up)
+            # Also try 2× beyond the target for very tiny crops
+            up2 = cv2.resize(gray, None, fx=scale * 2, fy=scale * 2,
+                             interpolation=cv2.INTER_CUBIC)
+            candidates.append(up2)
 
-        # CLAHE contrast enhancement
-        clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+        # ── Colour channel extraction ─────────────────────────────────────
+        # Warm-coloured (brown/gold/red) QR codes have low contrast in
+        # grayscale because the luminance of brown ≈ luminance of white.
+        # Blue channel is the complement of warm tones and gives the
+        # highest contrast for these codes.
+        if len(image.shape) == 3:
+            b, g, r = cv2.split(image)
+            candidates.extend([b, g, r])          # blue first (best for warm tints)
+            # Also try inverted channels
+            candidates.append(cv2.bitwise_not(b))
+
+        # ── Contrast enhancement ──────────────────────────────────────────
+        clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8, 8))
         candidates.append(clahe.apply(gray))
 
-        # Adaptive threshold
-        candidates.append(cv2.adaptiveThreshold(
-            gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 51, 10
-        ))
+        # Histogram equalisation (global)
+        candidates.append(cv2.equalizeHist(gray))
 
-        # Sharpening kernel
+        # ── Binarisation ──────────────────────────────────────────────────
+        # Otsu's method — best for bimodal (black + white) QR patterns
+        _, otsu = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+        candidates.append(otsu)
+        candidates.append(cv2.bitwise_not(otsu))   # inverted Otsu
+
+        # Adaptive threshold (handles uneven lighting)
+        adapt = cv2.adaptiveThreshold(
+            gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 51, 10
+        )
+        candidates.append(adapt)
+
+        # ── Sharpening ────────────────────────────────────────────────────
         kernel = np.array([[0, -1, 0], [-1, 5, -1], [0, -1, 0]])
         candidates.append(cv2.filter2D(gray, -1, kernel))
+
+        # ── Morphological cleanup on Otsu result ─────────────────────────
+        # Close small gaps in QR modules that noisy scans introduce
+        morph_kernel = np.ones((2, 2), np.uint8)
+        candidates.append(cv2.morphologyEx(otsu, cv2.MORPH_CLOSE, morph_kernel))
+
+        return candidates
+
+    def _detect_with_pyzbar(self, image: np.ndarray) -> List[Dict]:
+        """Detect QR codes using pyzbar library with multiple preprocessing strategies."""
+        candidates = self._build_preprocessing_variants(image)
 
         detected_codes = []
         for candidate in candidates:
@@ -150,26 +220,21 @@ class QRReader:
         
         return results
     
-    def _detect_with_opencv(self, image: np.ndarray) -> List[Dict]:
-        """Detect QR codes using OpenCV's built-in detector."""
-        if len(image.shape) == 3:
-            gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-        else:
-            gray = image.copy()
+    def _detect_with_opencv(self, image: np.ndarray, detector=None) -> List[Dict]:
+        """Detect QR codes using an OpenCV QR detector.
+
+        Args:
+            image: Input image (BGR numpy array)
+            detector: OpenCV QR detector instance (QRCodeDetector or
+                      QRCodeDetectorAruco).  Defaults to self.opencv_detector.
+        """
+        if detector is None:
+            detector = self.opencv_detector
+        if detector is None:
+            return []
 
         results = []
-
-        # Build preprocessing variants (same as pyzbar approach for consistency)
-        images_to_try = [gray]
-
-        h, w = gray.shape[:2]
-        if max(h, w) < 800:
-            scale = 800 / max(h, w)
-            images_to_try.append(cv2.resize(gray, None, fx=scale, fy=scale, interpolation=cv2.INTER_CUBIC))
-
-        clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
-        images_to_try.append(clahe.apply(gray))
-        images_to_try.append(self.enhance_for_qr_detection(image))
+        images_to_try = self._build_preprocessing_variants(image)
         
         for img in images_to_try:
             try:
