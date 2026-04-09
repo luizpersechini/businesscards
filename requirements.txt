@@ -1,13 +1,59 @@
-streamlit==1.28.0
-opencv-python==4.8.1.78
-easyocr==1.7.1
-pyzbar==0.1.9
-pillow==10.1.0
-numpy==1.24.3
-vobject==0.9.7
-requests==2.31.0
-torch==2.1.0
-torchvision==0.16.0
-pandas==2.0.3
-openpyxl==3.1.2
+# ============================================================================
+# Business Card Scanner v2.0 - Requirements
+# ============================================================================
+#
+# This file has been modernized to support the v2.0 architecture with:
+# - Typed dataclass models for data validation
+# - Multi-provider LLM/vision support (Ollama, vLLM, Claude, OpenAI)
+# - Async HTTP client for cloud integrations
+# - Optional cloud fallbacks
 
+# ============================================================================
+# CORE UI & COMPUTER VISION
+# ============================================================================
+streamlit>=1.28.0          # Web UI framework
+opencv-python==4.8.1.78    # Image processing
+pillow==10.1.0             # Image manipulation
+pyzbar==0.1.9              # QR/barcode detection
+
+# ============================================================================
+# DATA PROCESSING & EXPORT
+# ============================================================================
+numpy==1.24.3              # Numerical computing
+pandas==2.0.3              # Data manipulation and CSV operations
+openpyxl==3.1.2            # Excel file generation
+vobject==0.9.7             # VCF (vCard) generation
+
+# ============================================================================
+# DATA VALIDATION & CONFIGURATION
+# ============================================================================
+# Uses stdlib dataclasses - no external dependency needed
+# Models: ContactInfo, ScanResult, ProviderConfig in utils/models.py
+
+# ============================================================================
+# HTTP CLIENTS
+# ============================================================================
+requests==2.31.0           # Synchronous HTTP client
+                           # Still used by Ollama provider for legacy compatibility
+httpx>=0.24.0              # Async/sync HTTP client
+                           # Primary client for new cloud provider integrations
+
+# ============================================================================
+# CLOUD PROVIDER AUTHENTICATION & APIs
+# ============================================================================
+msal>=1.24.0               # Microsoft MSAL
+                           # Enables OAuth2 for MS Graph (Outlook contacts sync)
+anthropic>=0.15.0          # Claude API client
+                           # Optional cloud fallback for vision extraction
+openai>=1.0.0              # OpenAI API client
+                           # Optional cloud fallback for vision extraction
+
+# ============================================================================
+# DEVELOPMENT & TESTING
+# ============================================================================
+# Uncomment for development:
+# pytest>=7.4.0
+# pytest-cov>=4.1.0
+# black>=23.0.0
+# mypy>=1.4.0
+# ruff>=0.1.0

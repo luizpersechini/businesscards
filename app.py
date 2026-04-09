@@ -932,7 +932,7 @@ def process_business_cards(uploaded_files, vision_model, vision_timeout, detecti
         with col1:
             st.markdown("#### Original Image")
             image = load_image(uploaded_file)
-            st.image(image, width='stretch')
+            st.image(image, use_container_width=True)
         
         # Convert to OpenCV format
         cv_image = cv2.cvtColor(image, cv2.COLOR_RGB2BGR)
@@ -991,7 +991,7 @@ def process_business_cards(uploaded_files, vision_model, vision_timeout, detecti
             with card_col1:
                 st.markdown("**Detected Card Image**")
                 card_rgb = cv2.cvtColor(card_image, cv2.COLOR_BGR2RGB)
-                st.image(card_rgb, width='stretch')
+                st.image(card_rgb, use_container_width=True)
             
             with card_col2:
                 qr_data = None
@@ -1519,7 +1519,7 @@ def main():
                                        margin_top, margin_bottom, margin_left, margin_right)
             overlay_rgb = cv2.cvtColor(overlay, cv2.COLOR_BGR2RGB)
             
-            st.image(overlay_rgb, caption=f"Grid Preview: {manual_grid_cols}x{manual_grid_rows}", width='stretch')
+            st.image(overlay_rgb, caption=f"Grid Preview: {manual_grid_cols}x{manual_grid_rows}", use_container_width=True)
             
             st.markdown("""
             **Legend:**
@@ -1726,7 +1726,7 @@ def main():
                         btn_label = "🔓" if is_locked else "🔒"
                         if st.button(btn_label, key=f"lock_{idx}",
                                    help="Lock/Unlock" if not is_locked else "Lock/Unlock",
-                                   width='stretch'):
+                                   use_container_width=True):
                             st.session_state.processed_cards[idx]['locked'] = not is_locked
                             update_history_card_entry(
                                 card_index=idx + 1,
@@ -1740,7 +1740,7 @@ def main():
                         if st.button("🔄", key=f"retry_{idx}",
                                    disabled=retry_disabled,
                                    help="Retry" if not retry_disabled else "Unlock first",
-                                   width='stretch'):
+                                   use_container_width=True):
                             st.session_state[f'retry_card_{idx}'] = True
                             st.rerun()
                     
@@ -1754,7 +1754,7 @@ def main():
                                 mime="text/vcard",
                                 key=f"vcf_{idx}_{card['filename']}",
                                 help="Download VCF",
-                                width='stretch'
+                                use_container_width=True
                             )
                     
                     with action_col4:
@@ -1780,7 +1780,7 @@ def main():
                                 mime="text/csv",
                                 key=f"outlook_csv_{idx}_{card['filename']}",
                                 help="Download Outlook CSV",
-                                width='stretch'
+                                use_container_width=True
                             )
                 
                 # Add subtle divider between items
@@ -1809,7 +1809,7 @@ def main():
                         file_name=f"contacts_{timestamp}.xlsx",
                         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                         help="Microsoft Excel format with formatting",
-                        width='stretch'
+                        use_container_width=True
                     )
                 
                 # Combined VCF
@@ -1822,7 +1822,7 @@ def main():
                         file_name=f"all_contacts_{timestamp}.vcf",
                         mime="text/vcard",
                         help="All contacts in one VCF file",
-                        width='stretch'
+                        use_container_width=True
                     )
             
             with bulk_col2:
@@ -1850,7 +1850,7 @@ def main():
                         file_name=f"outlook_import_{timestamp}.csv",
                         mime="text/csv",
                         help="Import this CSV directly into Outlook",
-                        width='stretch'
+                        use_container_width=True
                     )
                     
                     # Show diagnostic report if CSV validator is available
@@ -1887,7 +1887,7 @@ def main():
                         file_name=f"contacts_package_{timestamp}.zip",
                         mime="application/zip",
                         help="ZIP file with all selected formats",
-                        width='stretch'
+                        use_container_width=True
                     )
 
             # Push to Outlook button
