@@ -932,7 +932,7 @@ def process_business_cards(uploaded_files, vision_model, vision_timeout, detecti
         with col1:
             st.markdown("#### Original Image")
             image = load_image(uploaded_file)
-            st.image(image, use_container_width=True)
+            st.image(image)
         
         # Convert to OpenCV format
         cv_image = cv2.cvtColor(image, cv2.COLOR_RGB2BGR)
@@ -991,7 +991,7 @@ def process_business_cards(uploaded_files, vision_model, vision_timeout, detecti
             with card_col1:
                 st.markdown("**Detected Card Image**")
                 card_rgb = cv2.cvtColor(card_image, cv2.COLOR_BGR2RGB)
-                st.image(card_rgb, use_container_width=True)
+                st.image(card_rgb)
             
             with card_col2:
                 qr_data = None
@@ -1519,7 +1519,7 @@ def main():
                                        margin_top, margin_bottom, margin_left, margin_right)
             overlay_rgb = cv2.cvtColor(overlay, cv2.COLOR_BGR2RGB)
             
-            st.image(overlay_rgb, caption=f"Grid Preview: {manual_grid_cols}x{manual_grid_rows}", use_container_width=True)
+            st.image(overlay_rgb, caption=f"Grid Preview: {manual_grid_cols}x{manual_grid_rows}")
             
             st.markdown("""
             **Legend:**
