@@ -12,11 +12,7 @@ from PIL import Image
 from io import BytesIO
 from typing import Optional, Dict, List
 
-# Import from parent
-import sys
-import os
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from models import ContactInfo, ProviderType, ProviderStatus, ProviderConfig, ScanResult
+from ..models import ContactInfo, ProviderType, ProviderStatus, ProviderConfig, ScanResult
 
 
 class VisionProvider(abc.ABC):

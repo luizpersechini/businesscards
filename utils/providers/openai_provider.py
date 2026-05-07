@@ -11,10 +11,7 @@ import numpy as np
 from typing import Optional, Dict, List
 
 from .base import VisionProvider
-
-import sys
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from models import ProviderType, ProviderStatus, ProviderConfig, ScanResult
+from ..models import ProviderType, ProviderStatus, ProviderConfig, ScanResult
 
 
 class OpenAIVisionProvider(VisionProvider):

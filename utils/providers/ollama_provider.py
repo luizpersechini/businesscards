@@ -18,9 +18,7 @@ from typing import Optional, Dict, List
 
 from .base import VisionProvider
 
-import sys, os
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from models import ProviderType, ProviderStatus, ProviderConfig, ScanResult
+from ..models import ProviderType, ProviderStatus, ProviderConfig, ScanResult
 
 # Models that are OCR-specialised and respond to plain "read text" prompts,
 # NOT to JSON schema / instruction-following prompts.

@@ -11,10 +11,7 @@ import numpy as np
 from typing import Optional, Dict, List
 
 from .base import VisionProvider
-
-import sys
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from models import ProviderType, ProviderStatus, ProviderConfig, ScanResult, ContactInfo
+from ..models import ProviderType, ProviderStatus, ProviderConfig, ScanResult, ContactInfo
 
 
 class ClaudeVisionProvider(VisionProvider):
@@ -22,7 +19,7 @@ class ClaudeVisionProvider(VisionProvider):
 
     SUPPORTED_MODELS = [
         "claude-sonnet-4-6",
-        "claude-opus-4-6",
+        "claude-opus-4-7",
         "claude-haiku-4-5-20251001",
     ]
 

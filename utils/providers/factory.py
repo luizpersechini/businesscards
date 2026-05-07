@@ -15,9 +15,7 @@ from .vllm_provider import VLLMVisionProvider
 from .claude_provider import ClaudeVisionProvider
 from .openai_provider import OpenAIVisionProvider
 
-import sys, os
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from models import (
+from ..models import (
     ProviderType, ProviderStatus, ProviderConfig,
     ScanResult, BatchScanResult, ContactInfo
 )
