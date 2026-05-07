@@ -313,7 +313,15 @@ class QRReader:
         if data.startswith('BEGIN:VCARD'):
             parsed['type'] = 'vcard'
             parsed['data'] = self._parse_vcard(data)
-        
+
+        # Check if it's a MECARD (Japanese DoCoMo / industry-standard QR
+        # format used on many business cards). MECARD uses the same field
+        # vocabulary as vCard but a flat semicolon-separated layout, so we
+        # parse it into the same dict shape vCard produces.
+        elif data.upper().startswith('MECARD:'):
+            parsed['type'] = 'vcard'   # treat downstream as vcard
+            parsed['data'] = self._parse_mecard(data)
+
         # Check if it's a URL
         elif data.startswith('http://') or data.startswith('https://'):
             parsed['type'] = 'url'
@@ -389,7 +397,46 @@ class QRReader:
                 contact_data['url'] = value
         
         return contact_data
-    
+
+    def _parse_mecard(self, mecard_string: str) -> Dict:
+        """
+        Parse a MECARD string into the same dict shape as vCard.
+
+        MECARD format example:
+            MECARD:N:Silva,João;ORG:Acme;TEL:+5511999999999;EMAIL:joao@acme.com;URL:acme.com;ADR:Rua Augusta 100;NOTE:VIP;;
+        """
+        contact_data: Dict = {}
+        body = mecard_string.split(':', 1)[1] if ':' in mecard_string else ''
+        # MECARD fields are separated by ';' (terminated by ';;')
+        for field in body.split(';'):
+            field = field.strip()
+            if not field or ':' not in field:
+                continue
+            key, value = field.split(':', 1)
+            key = key.upper()
+            if key == 'N':
+                # MECARD uses Last,First (comma) — vCard uses Last;First.
+                parts = [p.strip() for p in value.split(',')]
+                if parts:
+                    contact_data['last_name'] = parts[0]
+                if len(parts) > 1:
+                    contact_data['first_name'] = parts[1]
+            elif key == 'ORG':
+                contact_data['organization'] = value
+            elif key in ('TITLE', 'ROLE'):
+                contact_data['title'] = value
+            elif key == 'TEL':
+                contact_data.setdefault('phones', []).append(value)
+            elif key == 'EMAIL':
+                contact_data.setdefault('emails', []).append(value)
+            elif key == 'ADR':
+                contact_data['address'] = value.replace(';', ', ')
+            elif key == 'URL':
+                contact_data['url'] = value
+            elif key == 'NOTE':
+                contact_data['notes'] = value
+        return contact_data
+
     def draw_qr_codes(self, image: np.ndarray, qr_results: List[Dict]) -> np.ndarray:
         """
         Draw bounding boxes around detected QR codes.

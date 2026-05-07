@@ -148,6 +148,13 @@ def qr_data_is_sufficient(qr_data: Optional[dict]) -> bool:
     org = qr_data.get('organization', '')
     if has_name and org and org.strip():
         return True
+
+    # Criterion 4: Has at least one phone or email AND an organization.
+    # Many minimalist business cards put the org in the QR alongside a
+    # single contact channel — saves the vision call when the model would
+    # have produced the same data.
+    if org and org.strip() and (phones or qr_data.get('emails') or qr_data.get('email')):
+        return True
     
     return False
 
