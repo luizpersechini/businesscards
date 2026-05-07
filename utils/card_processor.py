@@ -5,7 +5,7 @@ Orchestrates card detection, QR reading, and vision-based contact extraction.
 
 import cv2
 import numpy as np
-from typing import Dict, List, Optional, Tuple
+from typing import Callable, Dict, List, Optional, Tuple
 import logging
 
 from utils.improved_card_detector import ImprovedCardDetector
@@ -106,18 +106,18 @@ class CardProcessor:
         elif detection_mode == "Automatic":
             logger.info("Running automatic card detection")
             detected_cards = self.detector.detect_cards(image_bgr)
-            
+
             # Grid-layout fallback: if auto-detection found very few cards
             if len(detected_cards) < 4:
                 h_img, w_img = image_bgr.shape[:2]
                 aspect = w_img / h_img if h_img > 0 else 1.0
-                
+
                 # Infer grid from aspect ratio
                 if aspect < 1.4:
                     inferred_rows, inferred_cols = 4, 2
                 else:
                     inferred_rows, inferred_cols = 2, 4
-                
+
                 grid_cards = split_image_grid(image_bgr, inferred_rows, inferred_cols)
                 if len(grid_cards) > len(detected_cards):
                     logger.info(
@@ -125,7 +125,7 @@ class CardProcessor:
                         f"(aspect ratio: {aspect:.2f})"
                     )
                     return grid_cards
-            
+
             logger.info(f"Detected {len(detected_cards)} cards")
             return detected_cards
         
@@ -295,6 +295,7 @@ class CardProcessor:
         margin_bottom: int = 0,
         margin_left: int = 0,
         margin_right: int = 0,
+        cancel_check: Optional[Callable[[], bool]] = None,
     ) -> List[Dict]:
         """
         Process all cards in an image.
@@ -333,6 +334,12 @@ class CardProcessor:
         # Process each card
         processed_cards = []
         for card_idx, (card_image_bgr, contour) in enumerate(detected_cards):
+            if cancel_check and cancel_check():
+                logger.info(
+                    f"Cancellation requested — stopping batch at card "
+                    f"{card_idx + 1}/{len(detected_cards)}"
+                )
+                break
             logger.info(f"Processing card {card_idx + 1}/{len(detected_cards)}")
             
             # Convert to RGB for storage

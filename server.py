@@ -11,6 +11,7 @@ import json
 import os
 import sys
 import tempfile
+import threading
 import time
 from pathlib import Path
 from typing import List, Optional, Tuple
@@ -39,6 +40,11 @@ _provider_factory = ProviderFactory()
 _history = HistoryManager()
 _contacts = ContactsRepository()
 _exporter = ExportProcessor()
+
+# Cancellation flag for the in-flight scan. Single-scan-at-a-time assumption
+# (this is a desktop-style local app). Set by POST /api/scan/stop, cleared
+# by _scan_generator at the start of each scan.
+_scan_cancel_event = threading.Event()
 
 FRONTEND_DIR = Path(__file__).parent / "frontend"
 TEMP_DIR = Path(__file__).parent / "temp"
@@ -243,10 +249,14 @@ async def _scan_generator(
     timeout: int,
 ):
     """Async generator that yields SSE events for the scan pipeline."""
+    # Reset the cancel flag for this scan
+    _scan_cancel_event.clear()
+
     yield _sse({"stage": "warmup", "progress": 5, "message": "Loading model…"})
     await asyncio.sleep(0)
 
     processor = CardProcessor(provider_factory=_provider_factory)
+    cancel_check = _scan_cancel_event.is_set
 
     # Map frontend mode strings to CardProcessor detection_mode
     mode_map = {"auto": "Automatic", "single": "Single Card", "grid": "Manual - Grid Layout"}
@@ -255,11 +265,20 @@ async def _scan_generator(
     all_cards = []
     total_files = len(files)
     run_id = None
+    file_payloads: List[dict] = []   # for history persistence — preserved bytes
 
     try:
         for file_idx, upload in enumerate(files):
+            if cancel_check():
+                yield _sse({"stage": "stopped", "message": "Scan cancelled by user"})
+                return
             raw = await upload.read()
             filename = upload.filename or f"file_{file_idx}"
+            file_payloads.append({
+                "name": filename,
+                "data": raw,
+                "media_type": "pdf" if filename.lower().endswith(".pdf") else "image",
+            })
 
             progress_base = 10 + int(file_idx / total_files * 30)
             
@@ -274,23 +293,26 @@ async def _scan_generator(
                     "message": f"Processing PDF '{filename}'…",
                 })
                 await asyncio.sleep(0)
-                
+
                 try:
                     # Get all pages from PDF
                     pages = _pdf_to_images(raw, filename, dpi=200)
                 except ValueError as e:
                     yield _sse({"stage": "error", "message": str(e)})
                     return
-                
+
                 pdf_cards = []
                 for page_idx, (bgr, rgb) in enumerate(pages):
+                    if cancel_check():
+                        yield _sse({"stage": "stopped", "message": "Scan cancelled by user"})
+                        return
                     yield _sse({
                         "stage": "extract",
                         "progress": progress_base + int((page_idx + 1) / len(pages) * 10),
                         "message": f"Extracting data from page {page_idx + 1} of {len(pages)}…",
                     })
                     await asyncio.sleep(0)
-                    
+
                     # Process this page
                     loop = asyncio.get_event_loop()
                     page_cards = await loop.run_in_executor(
@@ -303,13 +325,14 @@ async def _scan_generator(
                             vision_timeout=timeout,
                             grid_rows=rows,
                             grid_cols=cols,
+                            cancel_check=cancel_check,
                         )
                     )
-                    
+
                     for card in page_cards:
                         card["_source_file"] = f"{filename} (page {page_idx + 1})"
                     pdf_cards.extend(page_cards)
-                
+
                 # Add all cards from PDF pages
                 all_cards.extend(pdf_cards)
                 
@@ -347,58 +370,73 @@ async def _scan_generator(
                         vision_timeout=timeout,
                         grid_rows=rows,
                         grid_cols=cols,
+                        cancel_check=cancel_check,
                     )
                 )
 
                 for card in cards:
                     card["_source_file"] = filename
                 all_cards.extend(cards)
+                if cancel_check():
+                    yield _sse({"stage": "stopped", "message": "Scan cancelled by user"})
+                    return
 
         yield _sse({"stage": "generate", "progress": 90, "message": "Generating VCF files…"})
         await asyncio.sleep(0)
 
         # Persist to history
+        run_id = None
         try:
             settings = {
                 "vision_model": model,
                 "detection_mode": detection_mode,
                 "vision_timeout": timeout,
             }
-            original_files = [f.filename for f in files]
-            run_id = await asyncio.get_event_loop().run_in_executor(
+            # Build the processed_cards payload that HistoryManager expects.
+            processed_cards_payload = [
+                {
+                    "filename": c.get("filename", f"card_{i + 1}.vcf"),
+                    "source_file": c.get("_source_file", ""),
+                    "locked": False,
+                    "contact_data": c.get("contact_data") or {},
+                    "vcf_content": c.get("vcf_content"),
+                    "card_image": c.get("card_image"),
+                }
+                for i, c in enumerate(all_cards)
+                if (c.get("contact_data") or {})
+            ]
+
+            loop = asyncio.get_event_loop()
+            run_id = await loop.run_in_executor(
                 None,
-                lambda: _history.create_run(settings=settings, original_filenames=original_files).run_id,
+                lambda: _history.create_run(
+                    settings=settings,
+                    original_files=file_payloads,
+                    processed_cards=processed_cards_payload,
+                ).run_id,
             )
 
+            # Tag cards with stable IDs and mirror to the contacts repository.
             for idx, card in enumerate(all_cards):
                 cd = card.get("contact_data") or {}
-                if cd:
-                    # Generate card_id early so it can be stored in repo
-                    card_id = f"{run_id}_{idx}"
-                    card["_card_id"] = card_id
-                    await asyncio.get_event_loop().run_in_executor(
-                        None,
-                        lambda c=card, i=idx: _history.update_card(
-                            run_id=run_id,
-                            card_index=i,
-                            filename=c.get("filename", f"card_{i+1}.vcf"),
-                            source_file=c.get("_source_file", ""),
-                            locked=False,
-                            contact_data=c.get("contact_data", {}),
-                        ),
-                    )
-                    # Save to contacts repository with card_id for thumbnail association
-                    await asyncio.get_event_loop().run_in_executor(
-                        None,
-                        lambda c=card, cid=card_id: _contacts.add_contact(
-                            contact_data=c.get("contact_data", {}),
-                            source_file=c.get("_source_file", ""),
-                            card_id=cid,
-                        ),
-                    )
+                if not cd:
+                    continue
+                card_id = f"{run_id}_{idx}"
+                card["_card_id"] = card_id
+                await loop.run_in_executor(
+                    None,
+                    lambda c=card, cid=card_id: _contacts.add_contact(
+                        contact_data=c.get("contact_data", {}),
+                        source_file=c.get("_source_file", ""),
+                        card_id=cid,
+                    ),
+                )
         except Exception as hist_err:
-            # History persistence failure is non-fatal
-            pass
+            # History persistence failure is non-fatal for the user-facing scan,
+            # but we log it so silent breakage doesn't hide bugs.
+            import traceback
+            print(f"[history] save failed: {hist_err}", flush=True)
+            traceback.print_exc()
 
         # Build frontend card list
         frontend_cards = [
@@ -435,6 +473,17 @@ async def scan(
             "X-Accel-Buffering": "no",
         },
     )
+
+
+@app.post("/api/scan/stop")
+async def stop_scan():
+    """Signal the in-flight scan to stop at the next safe checkpoint.
+
+    The current in-flight card finishes (Ollama HTTP requests can't be killed
+    cleanly mid-call), then no further cards or pages are processed.
+    """
+    _scan_cancel_event.set()
+    return {"status": "stopping"}
 
 
 # ═══════════════════════════════════════════════════════════
@@ -636,8 +685,9 @@ def _run_to_api(entry) -> dict:
 @app.get("/api/history")
 async def list_history():
     try:
+        # _history.list_runs() already returns newest-to-oldest (sorted by mtime desc).
         runs = _history.list_runs()
-        return [_run_to_api(r) for r in reversed(runs)]
+        return [_run_to_api(r) for r in runs]
     except Exception:
         return []
 
@@ -712,4 +762,5 @@ async def serve_frontend():
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run("server:app", host="0.0.0.0", port=8501, reload=True)
+    port = int(os.environ.get("PORT", "8501"))
+    uvicorn.run("server:app", host="0.0.0.0", port=port, reload=True)

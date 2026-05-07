@@ -1431,11 +1431,22 @@ function ScannerTab({ tweaks, densityPad, onEditCard }) {
   const [elapsed, setElapsed] = useState(0);
   const [cardCount, setCardCount] = useState(0);
   const timerRef = useRef(null);
+  const abortRef = useRef(null);
   const [cards, setCards] = useState([]);
 
   // Store actual File objects so we can send them to the server
   const handleFilesAdded = (newFiles) => {
     setFiles(prev => [...prev, ...newFiles]);
+  };
+
+  const handleStop = async () => {
+    // Tell the server to stop at the next safe checkpoint
+    try { await fetch('/api/scan/stop', { method: 'POST' }); } catch {}
+    // Cancel the SSE stream client-side
+    if (abortRef.current) {
+      try { abortRef.current.abort(); } catch {}
+    }
+    setMessage('Stopping…');
   };
 
   const handleProcess = async () => {
@@ -1456,8 +1467,13 @@ function ScannerTab({ tweaks, densityPad, onEditCard }) {
     formData.append('cols', String(config.cols));
     formData.append('timeout', String(config.timeout));
 
+    abortRef.current = new AbortController();
     try {
-      const response = await fetch('/api/scan', { method: 'POST', body: formData });
+      const response = await fetch('/api/scan', {
+        method: 'POST',
+        body: formData,
+        signal: abortRef.current.signal,
+      });
       if (!response.ok) {
         throw new Error(`Server error: ${response.status}`);
       }
@@ -1480,6 +1496,12 @@ function ScannerTab({ tweaks, densityPad, onEditCard }) {
               setPhase('idle');
               return;
             }
+            if (evt.stage === 'stopped') {
+              clearInterval(timerRef.current);
+              setMessage(evt.message || 'Scan cancelled');
+              setPhase('idle');
+              return;
+            }
             if (evt.stage === 'done') {
               setCards(evt.cards || []);
               setPhase('results');
@@ -1493,9 +1515,17 @@ function ScannerTab({ tweaks, densityPad, onEditCard }) {
         }
       }
     } catch (err) {
+      if (err.name === 'AbortError') {
+        // User clicked Stop — server-side stop endpoint already called
+        clearInterval(timerRef.current);
+        setPhase('idle');
+        return;
+      }
       console.error('Process failed:', err);
       clearInterval(timerRef.current);
       setPhase('idle');
+    } finally {
+      abortRef.current = null;
     }
   };
 
@@ -1554,20 +1584,25 @@ function ScannerTab({ tweaks, densityPad, onEditCard }) {
               <Btn variant="ghost" style={{ flex: 1 }} onClick={handleReset} icon={Icons.refresh}>New Scan</Btn>
               <Btn variant="primary" style={{ flex: 1 }} icon={Icons.plus} onClick={() => setPhase('idle')}>Add More</Btn>
             </div>
+          ) : phase === 'processing' ? (
+            <Btn
+              variant="ghost"
+              size="lg"
+              style={{ width: '100%', justifyContent: 'center', color: 'var(--danger, #d63b3b)', borderColor: 'var(--danger, #d63b3b)' }}
+              onClick={handleStop}
+            >
+              <Spinner size={14} /> Stop scan
+            </Btn>
           ) : (
             <Btn
               variant="primary"
               size="lg"
               style={{ width: '100%', justifyContent: 'center' }}
-              icon={phase === 'processing' ? undefined : Icons.scan}
-              disabled={!files.length || phase === 'processing'}
+              icon={Icons.scan}
+              disabled={!files.length}
               onClick={handleProcess}
             >
-              {phase === 'processing' ? (
-                <><Spinner size={14} /> Processing…</>
-              ) : (
-                `Process ${files.length ? `${files.length} file${files.length !== 1 ? 's' : ''}` : 'Cards'}`
-              )}
+              {`Process ${files.length ? `${files.length} file${files.length !== 1 ? 's' : ''}` : 'Cards'}`}
             </Btn>
           )}
         </div>
@@ -1678,7 +1713,7 @@ function StatCard({ value, label, accent }) {
   );
 }
 
-function ContactRow({ contact: c, selected, onSelect, onDelete, expanded, onToggleExpand }) {
+function ContactRow({ contact: c, selected, onSelect, onDelete, onEdit, expanded, onToggleExpand }) {
   const initials = (c.contact.fullName || '?').split(' ').slice(0, 2).map(w => w[0]).join('').toUpperCase();
   const hue = ((c.contact.fullName || '').split('').reduce((a, ch) => a + ch.charCodeAt(0), 0) * 37) % 360;
 
@@ -1733,7 +1768,18 @@ function ContactRow({ contact: c, selected, onSelect, onDelete, expanded, onTogg
             style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-tertiary)', padding: 4, display: 'flex', alignItems: 'center' }}>
             <Icons.chevronDown color="currentColor" style={{ transform: expanded ? 'rotate(0)' : 'rotate(-90deg)', transition: 'transform 0.15s' }} />
           </button>
+          {onEdit && (
+            <button onClick={onEdit}
+              title="Edit contact"
+              style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-tertiary)', padding: 4, display: 'flex', alignItems: 'center', borderRadius: 4 }}
+              onMouseEnter={e => e.currentTarget.style.color = 'var(--accent)'}
+              onMouseLeave={e => e.currentTarget.style.color = 'var(--text-tertiary)'}
+            >
+              <Icons.edit color="currentColor" />
+            </button>
+          )}
           <button onClick={onDelete}
+            title="Delete contact"
             style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-tertiary)', padding: 4, display: 'flex', alignItems: 'center', borderRadius: 4 }}
             onMouseEnter={e => e.currentTarget.style.color = 'var(--danger)'}
             onMouseLeave={e => e.currentTarget.style.color = 'var(--text-tertiary)'}
@@ -1776,7 +1822,7 @@ function Detail({ icon: Icon, label, value, accent }) {
   );
 }
 
-function CompanyGroup({ company, contacts, selectedIds, onSelect, onDelete, expandedId, onToggleExpand }) {
+function CompanyGroup({ company, contacts, selectedIds, onSelect, onDelete, onEdit, expandedId, onToggleExpand }) {
   const hue = (company.split('').reduce((a, ch) => a + ch.charCodeAt(0), 0) * 53) % 360;
   const [groupExpanded, setGroupExpanded] = useState(true);
   const allSelected = contacts.every(c => selectedIds.has(c.id));
@@ -1824,6 +1870,7 @@ function CompanyGroup({ company, contacts, selectedIds, onSelect, onDelete, expa
               selected={selectedIds.has(c.id)}
               onSelect={() => onSelect(c.id)}
               onDelete={() => onDelete(c.id)}
+              onEdit={onEdit ? () => onEdit(c) : undefined}
               expanded={expandedId === c.id}
               onToggleExpand={() => onToggleExpand(c.id)}
             />
@@ -1842,6 +1889,7 @@ function ContactsTab({ tweaks, densityPad }) {
   const [selectedIds, setSelectedIds] = useState(new Set());
   const [expandedId, setExpandedId] = useState(null);
   const [exportDone, setExportDone] = useState('');
+  const [editingContact, setEditingContact] = useState(null);
 
   // Load real contacts on mount
   useEffect(() => {
@@ -1885,6 +1933,24 @@ function ContactsTab({ tweaks, densityPad }) {
     window.apiDel('/api/contacts/' + id).catch(() => {});
   };
   const handleToggleExpand = (id) => setExpandedId(prev => prev === id ? null : id);
+
+  const handleEdit = (c) => setEditingContact(c);
+
+  const handleEditSave = async (updatedCard) => {
+    const id = updatedCard.id;
+    // Optimistic update
+    setContacts(prev => prev.map(c => c.id === id ? { ...c, contact: updatedCard.contact } : c));
+    setEditingContact(null);
+    try {
+      await window.apiPut('/api/contacts/' + id, { contact: updatedCard.contact });
+    } catch (err) {
+      console.error('Update contact failed:', err);
+      // Reload from server to revert if anything went wrong
+      window.apiGet('/api/contacts').then(data => {
+        if (Array.isArray(data)) setContacts(data);
+      }).catch(() => {});
+    }
+  };
 
   const handleExport = (fmt) => {
     const fmtMap = { 'VCF': 'vcf', 'Excel': 'xlsx', 'CSV': 'csv' };
@@ -2027,6 +2093,7 @@ function ContactsTab({ tweaks, densityPad }) {
               selectedIds={selectedIds}
               onSelect={toggleSelect}
               onDelete={handleDelete}
+              onEdit={handleEdit}
               expandedId={expandedId}
               onToggleExpand={handleToggleExpand}
             />
@@ -2040,6 +2107,7 @@ function ContactsTab({ tweaks, densityPad }) {
                 selected={selectedIds.has(c.id)}
                 onSelect={() => toggleSelect(c.id)}
                 onDelete={() => handleDelete(c.id)}
+                onEdit={() => handleEdit(c)}
                 expanded={expandedId === c.id}
                 onToggleExpand={() => handleToggleExpand(c.id)}
               />
@@ -2047,6 +2115,14 @@ function ContactsTab({ tweaks, densityPad }) {
           </div>
         )}
       </div>
+
+      {editingContact && (
+        <EditModal
+          card={editingContact}
+          onSave={handleEditSave}
+          onClose={() => setEditingContact(null)}
+        />
+      )}
     </div>
   );
 }
