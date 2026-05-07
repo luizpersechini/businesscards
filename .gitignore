@@ -27,6 +27,15 @@ wheels/
 temp/
 *.tmp
 
+# Test/coverage artifacts
+.coverage
+.coverage.*
+htmlcov/
+.pytest_cache/
+
+# Local env
+.env
+
 # IDE
 .vscode/
 .idea/
