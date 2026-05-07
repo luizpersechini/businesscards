@@ -47,9 +47,6 @@ class AppConfig:
     # History and persistence
     history_base_dir: str = "temp"
     
-    # UI/UX
-    streamlit_layout: str = "wide"
-    
     # Logging
     log_level: str = "INFO"
     log_file: Optional[str] = None
@@ -78,7 +75,6 @@ class AppConfig:
             ollama_preload_model=os.getenv("OLLAMA_PRELOAD_MODEL", "glm-ocr"),
             vllm_url=os.getenv("VLLM_URL", "http://localhost:8000"),
             history_base_dir=os.getenv("HISTORY_BASE_DIR", "temp"),
-            streamlit_layout=os.getenv("STREAMLIT_LAYOUT", "wide"),
             log_level=os.getenv("LOG_LEVEL", "INFO"),
             log_file=os.getenv("LOG_FILE"),
         )

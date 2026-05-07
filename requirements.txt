@@ -18,7 +18,6 @@ python-multipart>=0.0.9   # multipart/form-data upload support
 # ============================================================================
 # CORE UI & COMPUTER VISION
 # ============================================================================
-streamlit>=1.28.0          # Web UI framework (legacy; new UI uses FastAPI)
 opencv-python==4.8.1.78    # Image processing
 pillow>=10.3,<12           # Image manipulation (>=10.3 fixes CVE-2023-50447, Python 3.13 compatible)
 pillow-heif>=0.13.0        # HEIC/HEIF support (iPhone photos)

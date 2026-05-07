@@ -1,14 +1,14 @@
 # Leitor Ótimo Cartões LLM — Business card scanner (local-first, multi-LLM)
 
 ## Stack
-Python · Streamlit · OpenCV · Pillow · multi-LLM (Ollama local / Claude / OpenAI fallback) · pandas · openpyxl · vobject (VCF export)
+Python · FastAPI + uvicorn · React (frontend/) · OpenCV · Pillow · multi-LLM (Ollama local / Claude / OpenAI fallback) · pandas · openpyxl · vobject (VCF export)
 
 ## Run
 ```
-bash start_app.sh       # preferred: sets up env and launches Streamlit
-streamlit run app.py    # direct launch
+python3 server.py       # FastAPI server on :8501 — serves React UI + REST/SSE
 bash setup.sh           # first-time setup (venv + deps)
 ```
+On macOS, prefix with `DYLD_LIBRARY_PATH=/opt/homebrew/lib:$DYLD_LIBRARY_PATH` so pyzbar can find zbar.
 
 ## Test
 ```
@@ -17,9 +17,11 @@ pytest --cov=utils      # with coverage report → htmlcov/
 ```
 
 ## Structure
-- `app.py` — Streamlit UI entry point
+- `server.py` — FastAPI entry point (REST + SSE endpoints, serves frontend/index.html at /)
+- `frontend/` — React UI shell (index.html)
+- `business-card-reader/project/` — React component sources (jsx)
 - `utils/models.py` — dataclasses: ContactInfo, ScanResult, ProviderConfig
-- `utils/` — vision providers, image processing, export logic
+- `utils/` — vision providers, image processing, export logic, FastAPI helpers
 - `tests/` — pytest test suite
 - `temp/` — runtime temp files, don't commit
 - `htmlcov/` — coverage output, don't commit

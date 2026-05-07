@@ -26,26 +26,18 @@ brew install zbar
 
 ## Step 2: Start the Application
 
-**🌟 Recommended Method (includes QR code support):**
-```bash
-chmod +x start_app.sh
-./start_app.sh
-```
-
-**Alternative - Manual Start:**
-
-Terminal 1:
+Terminal 1 (Ollama, optional but recommended):
 ```bash
 ollama serve
 ```
 
-Terminal 2:
+Terminal 2 (FastAPI server + React frontend):
 ```bash
-export DYLD_LIBRARY_PATH="/opt/homebrew/lib:$DYLD_LIBRARY_PATH"
-streamlit run app.py
+export DYLD_LIBRARY_PATH="/opt/homebrew/lib:$DYLD_LIBRARY_PATH"   # macOS only — for QR support
+python3 server.py
 ```
 
-> 💡 **Tip**: Use `start_app.sh` to ensure QR code reading works!
+> 💡 The DYLD_LIBRARY_PATH export is only needed on macOS so `pyzbar` finds zbar.
 
 ## Step 3: Use the App
 

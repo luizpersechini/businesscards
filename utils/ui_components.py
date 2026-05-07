@@ -1,6 +1,7 @@
 """
-Streamlit UI helper functions for Business Card Scanner.
-Contains reusable UI components independent of main app logic.
+Image and grid helper functions for Business Card Scanner.
+Framework-agnostic helpers consumed by the FastAPI/React backend (server.py)
+and by utils/card_processor.py.
 """
 
 import cv2
@@ -13,10 +14,10 @@ from io import BytesIO
 def load_image(uploaded_file) -> np.ndarray:
     """
     Load an uploaded image file (supports HEIC/HEIF from iPhones).
-    
+
     Args:
-        uploaded_file: Streamlit UploadedFile object
-        
+        uploaded_file: A file-like object with .read() (e.g. FastAPI UploadFile.file).
+
     Returns:
         Image as numpy array in RGB format
     """

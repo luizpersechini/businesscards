@@ -96,14 +96,14 @@ ollama serve
 ### 3. Run the app
 
 ```bash
-# Recommended (sets correct library paths for QR reading)
-./start_app.sh
+# macOS only — needed for pyzbar to find zbar
+export DYLD_LIBRARY_PATH=/opt/homebrew/lib:$DYLD_LIBRARY_PATH
 
-# Or directly
-streamlit run app.py
+python3 server.py
 ```
 
-Open [http://localhost:8501](http://localhost:8501) in your browser.
+Open [http://localhost:8501](http://localhost:8501) in your browser. The FastAPI
+server serves the React frontend at `/` and exposes REST/SSE endpoints for the UI.
 
 ---
 
@@ -142,11 +142,12 @@ Pull any model with `ollama pull <model-name>`. The app automatically detects wh
 
 ```
 Leitor Otimo Cartoes LLM/
-├── app.py                          # Main Streamlit application
+├── server.py                       # FastAPI server — serves frontend + REST/SSE
+├── frontend/                       # Static React UI shell
+├── business-card-reader/project/   # React component sources
+├── pyproject.toml                  # Python project config
 ├── requirements.txt                # Python dependencies
 ├── setup.sh                        # Initial setup script
-├── start_app.sh                    # Recommended launch script (sets library paths)
-├── ollama_test.py                  # Standalone Ollama diagnostic tool
 ├── utils/
 │   ├── improved_card_detector.py   # OpenCV card detection + grid fallback
 │   ├── qr_reader.py                # QR code reading (pyzbar + OpenCV)
@@ -178,23 +179,14 @@ curl http://localhost:11434/api/tags    # verify it responds
 ollama list                             # check installed models
 ```
 
-### Run the Ollama diagnostic tool
-```bash
-python3 ollama_test.py
-# Test a specific model:
-python3 ollama_test.py --model glm-ocr
-```
-
 ### Only 2 cards detected in a grid scan
 Switch detection mode to **Manual - Grid Layout** and enter the correct row/col count. The automatic mode also attempts aspect-ratio-based grid inference as a fallback.
 
-### QR codes not reading
-Run via `./start_app.sh` to ensure the `zbar` library path is set correctly on macOS.
-
-### `DYLD_LIBRARY_PATH` error on macOS
+### QR codes not reading on macOS
+Set `DYLD_LIBRARY_PATH` so `pyzbar` can find the zbar dylib:
 ```bash
 export DYLD_LIBRARY_PATH=/opt/homebrew/lib:$DYLD_LIBRARY_PATH
-streamlit run app.py
+python3 server.py
 ```
 
 ### Vision timeout

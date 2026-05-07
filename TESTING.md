@@ -28,28 +28,26 @@ ollama serve
 
 **Terminal 2 - Start the App:**
 ```bash
-streamlit run app.py
+# macOS: needed for QR support
+export DYLD_LIBRARY_PATH=/opt/homebrew/lib:$DYLD_LIBRARY_PATH
+python3 server.py
 ```
 
-You should see a message like:
-```
-Local URL: http://localhost:8501
-```
+You should see uvicorn start on `http://localhost:8501`.
 
 ### 2. Open the Application
 
 Open your web browser and go to `http://localhost:8501`
 
 You should see:
-- ✅ Title: "📇 Business Card Scanner"
-- ✅ Upload button
-- ✅ Sidebar with configuration options
+- ✅ Title: "📇 Business Card Reader"
+- ✅ Upload zone
+- ✅ Settings panel (model, detection mode, timeout)
 
 ### 3. Check System Status
 
-In the sidebar, check the "System Status" section:
-- ✅ If Ollama is running, you should see "✅ Ollama: Running"
-- ✅ If you see available models listed, Ollama is properly configured
+The settings panel surfaces provider status. With Ollama running and a vision model
+installed, the model badge appears with a green indicator.
 
 ### 4. Test with Sample Images
 
