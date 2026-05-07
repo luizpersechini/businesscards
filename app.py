@@ -1421,10 +1421,10 @@ def main():
                 with col1:
                     confirm = st.button("✅ Done", key="btn_outlook_confirm",
                                         help="Click after entering the code in your browser",
-                                        use_container_width=True)
+                                        width='stretch')
                 with col2:
                     cancel = st.button("✖ Cancel", key="btn_outlook_cancel",
-                                       use_container_width=True)
+                                       width='stretch')
 
                 if cancel:
                     st.session_state.outlook_auth_flow = None
@@ -1726,7 +1726,7 @@ def main():
                         btn_label = "🔓" if is_locked else "🔒"
                         if st.button(btn_label, key=f"lock_{idx}",
                                    help="Lock/Unlock" if not is_locked else "Lock/Unlock",
-                                   use_container_width=True):
+                                   width='stretch'):
                             st.session_state.processed_cards[idx]['locked'] = not is_locked
                             update_history_card_entry(
                                 card_index=idx + 1,
@@ -1740,7 +1740,7 @@ def main():
                         if st.button("🔄", key=f"retry_{idx}",
                                    disabled=retry_disabled,
                                    help="Retry" if not retry_disabled else "Unlock first",
-                                   use_container_width=True):
+                                   width='stretch'):
                             st.session_state[f'retry_card_{idx}'] = True
                             st.rerun()
                     
@@ -1754,7 +1754,7 @@ def main():
                                 mime="text/vcard",
                                 key=f"vcf_{idx}_{card['filename']}",
                                 help="Download VCF",
-                                use_container_width=True
+                                width='stretch'
                             )
                     
                     with action_col4:
@@ -1780,7 +1780,7 @@ def main():
                                 mime="text/csv",
                                 key=f"outlook_csv_{idx}_{card['filename']}",
                                 help="Download Outlook CSV",
-                                use_container_width=True
+                                width='stretch'
                             )
                 
                 # Add subtle divider between items
@@ -1809,7 +1809,7 @@ def main():
                         file_name=f"contacts_{timestamp}.xlsx",
                         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                         help="Microsoft Excel format with formatting",
-                        use_container_width=True
+                        width='stretch'
                     )
                 
                 # Combined VCF
@@ -1822,7 +1822,7 @@ def main():
                         file_name=f"all_contacts_{timestamp}.vcf",
                         mime="text/vcard",
                         help="All contacts in one VCF file",
-                        use_container_width=True
+                        width='stretch'
                     )
             
             with bulk_col2:
@@ -1850,7 +1850,7 @@ def main():
                         file_name=f"outlook_import_{timestamp}.csv",
                         mime="text/csv",
                         help="Import this CSV directly into Outlook",
-                        use_container_width=True
+                        width='stretch'
                     )
                     
                     # Show diagnostic report if CSV validator is available
@@ -1887,7 +1887,7 @@ def main():
                         file_name=f"contacts_package_{timestamp}.zip",
                         mime="application/zip",
                         help="ZIP file with all selected formats",
-                        use_container_width=True
+                        width='stretch'
                     )
 
             # Push to Outlook button
