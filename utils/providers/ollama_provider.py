@@ -377,45 +377,35 @@ class OllamaVisionProvider(VisionProvider):
             r'|treasury|securities|decarbonization|commercial)\b',
             re.I
         )
-        # Brazilian ZIP (CEP): NNNNN-NNN — must NOT be treated as a phone number
+        # Brazilian ZIP (CEP): NNNNN-NNN — used to identify ZIP lines below.
         cep_re = re.compile(r'^\d{5}-\d{3}$')
 
-        # ── Phone numbers ──────────────────────────────────────────────────
-        # Brazilian formats:
-        #   +55 (31) 99999-8888  /  55 31 99999 8888  /  (31) 3456-7890
-        #   5541 4009 5855       /  31 4009-5855
-        # International: +1 (555) 123-4567  /  +44 20 7946 0958
-        phone_re = re.compile(
-            r'(?:\+?\d{1,3}[\s.-]?)?'          # optional country code (+55, 55)
-            r'(?:\(?\d{2,3}\)?[\s.-]?)?'        # optional area code ((31), 31)
-            r'\d{3,5}'                           # first block (3-5 digits)
-            r'(?:[\s.-]?\d{3,5})+'              # one or more additional blocks
-        )
-        phones_found: List[str] = []
-        for i, line in enumerate(lines):
-            if i in consumed:
-                continue
-            if email_re.search(line):
-                continue
-            for m in phone_re.finditer(line):
-                candidate = m.group(0).strip()
-                # Must have at least 8 digits (Brazilian landline minimum)
-                if len(re.sub(r'\D', '', candidate)) < 8:
+        # ── Phone numbers (Google libphonenumber) ────────────────────────────
+        # PhoneNumberMatcher handles +55, mobile-9 prefix, area codes, intl
+        # formats, and importantly REJECTS CEPs (NNNNN-NNN) automatically.
+        try:
+            import phonenumbers
+            phones_found: List[str] = []
+            for i, line in enumerate(lines):
+                if i in consumed:
                     continue
-                # Skip Brazilian ZIP codes (NNNNN-NNN, exactly 8 digits, no + or brackets)
-                if cep_re.match(candidate):
+                if email_re.search(line):
                     continue
-                # Skip bare 8-digit sequences that look like CEP (5+3 pattern)
-                digits_only = re.sub(r'\D', '', candidate)
-                if len(digits_only) == 8 and not candidate.startswith(('+', '(')):
-                    if cep_re.match(candidate) or re.match(r'\d{5}[\s.-]?\d{3}', candidate):
-                        continue
-                phones_found.append(candidate)
-                consumed.add(i)
-        if phones_found:
-            contact["phone"] = phones_found[0]
-            if len(phones_found) > 1:
-                contact["mobile"] = phones_found[1]
+                for match in phonenumbers.PhoneNumberMatcher(line, "BR"):
+                    formatted = phonenumbers.format_number(
+                        match.number,
+                        phonenumbers.PhoneNumberFormat.INTERNATIONAL,
+                    )
+                    phones_found.append(formatted)
+                    consumed.add(i)
+            if phones_found:
+                contact["phone"] = phones_found[0]
+                if len(phones_found) > 1:
+                    contact["mobile"] = phones_found[1]
+        except ImportError:
+            # phonenumbers not installed — leave phone fields empty rather
+            # than fall back to the brittle regex that misidentified CEPs.
+            pass
 
         # ── Store ZIP if found (look for CEP-format lines) ────────────────
         for i, line in enumerate(lines):

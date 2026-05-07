@@ -22,6 +22,7 @@ opencv-python==4.8.1.78    # Image processing
 pillow>=10.3,<12           # Image manipulation (>=10.3 fixes CVE-2023-50447, Python 3.13 compatible)
 pillow-heif>=0.13.0        # HEIC/HEIF support (iPhone photos)
 pyzbar==0.1.9              # QR/barcode detection
+phonenumbers>=8.13         # Google libphonenumber port — phone parsing/validation
 pymupdf>=1.23.0            # PDF rendering (no poppler needed)
 
 # ============================================================================
