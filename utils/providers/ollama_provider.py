@@ -9,6 +9,8 @@ Strategy:
     extraction prompt from the base class.
 """
 
+import json
+import os
 import re
 import time
 import requests
@@ -187,6 +189,18 @@ class OllamaVisionProvider(VisionProvider):
                         for k, v in qr_data.items():
                             if v and not contact_dict.get(k):
                                 contact_dict[k] = v
+                    # Optional LLM post-correction. Off by default; enable
+                    # by setting OCR_POST_CORRECTION_MODEL=qwen2.5:3b (or
+                    # any other small instruction-following Ollama model)
+                    # to fix typos / accent loss / field swaps the regex
+                    # parser couldn't handle. ~2-5s extra per card.
+                    correction_model = os.environ.get("OCR_POST_CORRECTION_MODEL", "").strip()
+                    if correction_model:
+                        contact_dict = self._llm_post_correct(
+                            raw_text=response_text,
+                            parsed=contact_dict,
+                            model=correction_model,
+                        ) or contact_dict
                 else:
                     contact_dict = self.parse_json_response(response_text)
 
@@ -259,6 +273,56 @@ class OllamaVisionProvider(VisionProvider):
                 ]
             },
         }
+
+    def _llm_post_correct(
+        self,
+        raw_text: str,
+        parsed: Dict,
+        model: str,
+    ) -> Optional[Dict]:
+        """Optional: ask a small LLM to clean up the regex parser's output.
+
+        Sends the raw OCR text plus our best-guess structured fields and
+        asks the model to fix typos, restore lost diacritics, and reassign
+        any obviously misplaced fields. Uses Ollama's `format=` schema so
+        the response is guaranteed to be valid JSON.
+
+        Returns the corrected dict, or None on any failure (caller falls
+        back to the original parsed dict).
+        """
+        prompt = (
+            "You are a JSON-only assistant. Below is the raw text read off "
+            "a business card by an OCR engine, and a draft contact record "
+            "extracted from it. Return the SAME JSON object, fixed: "
+            "restore lost diacritics, fix obvious typos against the raw "
+            "text, and move misplaced values into the right fields. Do not "
+            "invent values that aren't in the raw text. Output JSON only.\n\n"
+            f"RAW OCR TEXT:\n{raw_text}\n\n"
+            f"DRAFT JSON:\n{json.dumps(parsed, ensure_ascii=False)}\n"
+        )
+        try:
+            resp = requests.post(
+                f"{self.api_url}/api/generate",
+                json={
+                    "model": model,
+                    "prompt": prompt,
+                    "stream": False,
+                    "keep_alive": -1,
+                    "format": self._contact_json_schema(),
+                    "options": {"temperature": 0.0, "num_predict": 600},
+                },
+                timeout=self.config.timeout,
+            )
+            if resp.status_code != 200:
+                return None
+            text = resp.json().get("response", "").strip()
+            corrected = self.parse_json_response(text)
+            if not isinstance(corrected, dict):
+                return None
+            # Drop nulls so we never overwrite a real value with None
+            return {k: v for k, v in corrected.items() if v}
+        except Exception:
+            return None
 
     @staticmethod
     def _build_ocr_prompt() -> str:
