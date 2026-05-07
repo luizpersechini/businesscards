@@ -158,7 +158,7 @@ This should open Contacts app and prompt to add the contact.
 **Check:**
 - Is the card clearly visible in the image?
 - Is there enough contrast with the background?
-- Try adjusting "Min/Max Card Area" in sidebar settings
+- Try switching detection mode in the settings panel (Single Card / Grid Layout)
 
 **Fix:**
 - Crop image to focus on the card

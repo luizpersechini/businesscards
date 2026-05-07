@@ -54,24 +54,24 @@ echo "Checking for Ollama..."
 if command -v ollama &> /dev/null; then
     echo "✓ Ollama is installed"
 
-    # Check if llama3.2 model is available
-    echo "Checking for llama3.2 model..."
-    if ollama list | grep -q "llama3.2"; then
-        echo "✓ llama3.2 model is already installed"
+    # Check if glm-ocr model is available
+    echo "Checking for glm-ocr model..."
+    if ollama list | grep -q "glm-ocr"; then
+        echo "✓ glm-ocr model is already installed"
     else
-        echo "Downloading llama3.2 model (this may take a while)..."
-        ollama pull llama3.2
+        echo "Downloading glm-ocr model (this may take a while)..."
+        ollama pull glm-ocr
         if [ $? -eq 0 ]; then
-            echo "✓ llama3.2 model installed"
+            echo "✓ glm-ocr model installed"
         else
             echo "⚠ Could not download model. You can do this later with:"
-            echo "  ollama pull llama3.2"
+            echo "  ollama pull glm-ocr"
         fi
     fi
 else
     echo "⚠ Ollama is not installed"
     echo "For best results, install Ollama from: https://ollama.com"
-    echo "Then run: ollama pull llama3.2"
+    echo "Then run: ollama pull glm-ocr"
 fi
 echo ""
 

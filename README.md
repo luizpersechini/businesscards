@@ -110,7 +110,7 @@ server serves the React frontend at `/` and exposes REST/SSE endpoints for the U
 ## 🎮 Usage
 
 1. **Upload** one or more business card images (PNG / JPG / JPEG / BMP)
-2. **Configure** detection mode and vision model in the sidebar (defaults are usually fine)
+2. **Configure** detection mode and vision model in the settings panel (defaults are usually fine)
 3. **Click "Process Business Cards"**
 4. **Review** extracted contacts — edit any fields inline
 5. **Download** VCF, Excel, Outlook CSV, or a ZIP of everything
@@ -149,13 +149,15 @@ Leitor Otimo Cartoes LLM/
 ├── requirements.txt                # Python dependencies
 ├── setup.sh                        # Initial setup script
 ├── utils/
+│   ├── card_processor.py           # Per-card pipeline (detect → QR → vision → VCF)
 │   ├── improved_card_detector.py   # OpenCV card detection + grid fallback
+│   ├── ui_components.py            # Image / grid helpers shared by server.py
+│   ├── contacts_repository.py      # JSON-backed repository for saved contacts
 │   ├── qr_reader.py                # QR code reading (pyzbar + OpenCV)
 │   ├── vcf_generator.py            # VCF/vCard file generation
 │   ├── export_processor.py         # Excel + Outlook CSV export
-│   ├── csv_validator.py            # Outlook CSV format validation
 │   ├── history_manager.py          # Scan history archive
-│   ├── ms_graph.py                 # Optional Outlook 365 push via MS Graph
+│   ├── ms_graph.py                 # (Optional, currently unused) Outlook 365 push via MS Graph
 │   ├── models.py                   # Dataclasses (ContactInfo, ScanResult, etc.)
 │   └── providers/
 │       ├── factory.py              # ProviderFactory — LOCAL-FIRST strategy
@@ -190,7 +192,7 @@ python3 server.py
 ```
 
 ### Vision timeout
-- Increase the **Vision Timeout** slider in the sidebar (up to 600s)
+- Increase the **Vision Timeout** slider in the settings panel (up to 600s)
 - GLM-OCR is much faster than larger models — prefer it on slower hardware
 - Check GPU usage: `ollama ps` — if model isn't on GPU, performance will be slow
 

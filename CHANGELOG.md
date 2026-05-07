@@ -2,6 +2,34 @@
 
 All notable changes to the Business Card Scanner project will be documented in this file.
 
+## [2.0.0] — 2026-05
+
+Major architectural change: **Streamlit removed; FastAPI + React is now the only frontend.**
+
+### Added
+- **`server.py`** — FastAPI backend with REST + SSE streaming for the scan pipeline.
+- **React UI** under `frontend/index.html` (and `business-card-reader/project/`).
+- **Stop button** on the scanner with `POST /api/scan/stop` + per-card cancellation checkpoints in `CardProcessor.process_batch`.
+- **Edit contact** action in the Contacts tab — reuses the EditModal, optimistic update, `PUT /api/contacts/{id}`.
+- **`PORT`** env var for choosing the FastAPI bind port (default 8501).
+- **CI workflow** (`.github/workflows/ci.yml`) with pytest matrix on Python 3.10/3.11/3.12, system deps for libheif/tesseract/zbar.
+- **`.env.example`** documenting `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `MS_GRAPH_CLIENT_ID`, `MS_GRAPH_TENANT_ID`.
+- **OCR parser tests** (`tests/test_ocr_parser.py`) covering CEP/phone disambiguation, name vs company swap, all-caps logos, etc.
+
+### Changed
+- `pyproject.toml` bumped to **2.0.0**.
+- Provider package now uses relative imports (`from ..models import …`) instead of `sys.path.insert` hacks.
+- Outlook OAuth token cache (`utils/ms_graph.py`) written with `0o600` permissions from creation.
+- Claude Opus model ID corrected (`claude-opus-4-6` → `claude-opus-4-7`).
+- `pillow>=10.3,<12` (CVE-2023-50447) and `numpy>=1.26,<3`.
+- History list endpoint stops re-reversing the already-sorted result — newest runs now appear first.
+- History persistence call signature corrected (was raising TypeError silently every scan).
+
+### Removed
+- `app.py` (Streamlit UI), `start_app.sh`, `tests/test_app.py`.
+- Dead utils: `ocr_processor.py`, `csv_validator.py`, `logging_config.py`, `pdf_processor.py`, `pdf_memory_optimizer.py`, `performance_monitor.py`.
+- Stale session/roadmap docs: `IMPLEMENTATION_SUMMARY.md`, `SESSION_SUMMARY.md`, `IMPROVEMENTS.md`, `DESIGN_IMPLEMENTATION_SUMMARY.md`.
+
 # [Unreleased]
 
 ### 🗂️ Scan History & Persistence

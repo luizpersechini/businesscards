@@ -79,7 +79,7 @@ python3 server.py
 → Run `ollama serve` in a separate terminal
 
 **"No cards detected"**
-→ Adjust "Min/Max Card Area" sliders in sidebar
+→ Switch detection mode to **Single Card** or **Grid Layout** in the settings panel
 
 **OCR text is wrong**
 → Use better lighting and higher resolution image

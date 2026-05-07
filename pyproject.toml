@@ -4,10 +4,10 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "business-card-scanner"
-version = "1.4.0"
-description = "Local-first AI-powered business card scanner with multi-format export"
+version = "2.0.0"
+description = "Local-first AI-powered business card scanner — FastAPI + React frontend, Ollama/Claude/OpenAI vision providers"
 readme = "README.md"
-requires-python = ">=3.9"
+requires-python = ">=3.10"
 license = {text = "MIT"}
 
 [tool.pytest.ini_options]
@@ -45,7 +45,7 @@ exclude_lines = [
 
 [tool.black]
 line-length = 100
-target-version = ["py39"]
+target-version = ["py310"]
 include = '\.pyi?$'
 exclude = '''
 /(
@@ -63,12 +63,12 @@ exclude = '''
 
 [tool.ruff]
 line-length = 100
-target-version = "py39"
+target-version = "py310"
 exclude = [".git", "__pycache__", "build", "dist", ".venv"]
 ignore = ["E501"]  # Line too long (handled by black)
 
 [tool.mypy]
-python_version = "3.9"
+python_version = "3.10"
 warn_return_any = true
 warn_unused_configs = true
 disallow_untyped_defs = false
