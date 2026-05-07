@@ -468,34 +468,81 @@ class OllamaVisionProvider(VisionProvider):
                     contact["country"] = line.strip()
                 consumed.add(i)
 
-        # ── Name (first "person name" looking line) ────────────────────────
-        # Pre-mark company-keyword lines so they don't get mistaken for names.
-        # (They'll still be available for company detection since we don't add
-        # them to `consumed` here — we just skip them for name detection.)
-        for i, line in enumerate(lines):
-            if i in consumed:
+        # ── Pre-classify candidate lines with probablepeople (CRF model) ────
+        # probablepeople.tag() returns kind in {"Person", "Corporation",
+        # "Household"} along with structured fields (GivenName, Surname,
+        # SuffixGenerational, CorporationName, CorporationLegalType, …).
+        # We use it to drive BOTH name and company detection — eliminating
+        # the brittle heuristics that previously misclassified e.g.
+        # "Banco do Brasil" as a person.
+        pp_results: Dict[int, tuple] = {}   # idx -> (kind, parsed_dict)
+        try:
+            import probablepeople as pp  # type: ignore
+            from probableparsing import RepeatedLabelError  # type: ignore
+            for i, line in enumerate(lines):
+                if i in consumed:
+                    continue
+                line_stripped = line.strip()
+                words = line_stripped.split()
+                if not (1 <= len(words) <= 6):
+                    continue
+                if re.search(r'\d', line_stripped):
+                    continue
+                if re.search(r'[@#&/\\|<>{}[\]()=+*%$!^~;]', line_stripped):
+                    continue
+                # Skip all-caps logos / department headers — pp can't tell
+                # them apart from company names reliably
+                if line_stripped == line_stripped.upper() and len(line_stripped) > 3:
+                    continue
+                try:
+                    parsed_list, kind = pp.tag(line_stripped)
+                    pp_results[i] = (kind, dict(parsed_list))
+                except RepeatedLabelError:
+                    pass
+                except Exception:
+                    pass
+        except ImportError:
+            pass
+
+        # ── Name detection (probablepeople Person classification) ──────────
+        for i, (kind, parsed) in pp_results.items():
+            if kind != "Person":
                 continue
-            words = line.split()
-            # Candidate: 2-5 words, no digits, no special characters
-            if not (2 <= len(words) <= 5):
-                continue
-            if re.search(r'\d', line):
-                continue
-            if re.search(r'[@#&/\\|<>{}[\]()=+*%$!^~;]', line):
-                continue
-            # Skip all-caps lines — those are usually logos or department headers
-            if line == line.upper() and len(line) > 3:
-                continue
-            # Skip lines that contain company suffixes or title keywords
-            # Allow weak company keywords (they might be part of person names like "John Solutions")
-            if corp_re.search(line) or title_kw.search(line):
-                continue
-            # Must start with uppercase
-            if words[0] and words[0][0].isupper():
-                contact["firstName"] = words[0]
-                contact["lastName"] = ' '.join(words[1:])
+            # GivenName + (MiddleName) + Surname + (SuffixGenerational)
+            given = parsed.get("GivenName", "")
+            surname_parts = [
+                parsed.get("MiddleName", ""),       # e.g. "da", "de", middle
+                parsed.get("MiddleInitial", ""),
+                parsed.get("Surname", ""),
+                parsed.get("SuffixGenerational", ""),  # Jr., Sr., II
+            ]
+            surname = " ".join(p for p in surname_parts if p).strip()
+            if given:
+                contact["firstName"] = given
+                contact["lastName"] = surname or None
                 consumed.add(i)
                 break
+        else:
+            # Fallback heuristic if probablepeople didn't tag any line as Person
+            for i, line in enumerate(lines):
+                if i in consumed:
+                    continue
+                words = line.split()
+                if not (2 <= len(words) <= 5):
+                    continue
+                if re.search(r'\d', line):
+                    continue
+                if re.search(r'[@#&/\\|<>{}[\]()=+*%$!^~;]', line):
+                    continue
+                if line == line.upper() and len(line) > 3:
+                    continue
+                if corp_re.search(line) or title_kw.search(line):
+                    continue
+                if words[0] and words[0][0].isupper():
+                    contact["firstName"] = words[0]
+                    contact["lastName"] = " ".join(words[1:])
+                    consumed.add(i)
+                    break
 
         # ── Title (job role keywords) ──────────────────────────────────────
         for i, line in enumerate(lines):
@@ -506,18 +553,28 @@ class OllamaVisionProvider(VisionProvider):
                 consumed.add(i)
                 break
 
-        # ── Company detection (improved logic to avoid confusion with person names) ──
-        # Strategy:
-        # 1. Look for strong company indicators (suffixes like "Inc.", "Ltd.")
-        # 2. Look for lines with strong company keywords
-        # 3. Use position-based heuristics (companies often appear below names/titles)
-        # 4. Apply fallback logic with better person/company discrimination
-        
+        # ── Company detection ────────────────────────────────────────────
+        # Priority ladder:
+        # 1. probablepeople classified the line as "Corporation"
+        # 2. Strong indicators: company suffixes (Inc., Ltd., Ltda, S.A.)
+        # 3. Strong company keywords (Banco, Tecnologia, Bank...)
+        # 4. Weak company keywords + position heuristic
+        # 5. Email domain inference (last resort)
+
         # Free email domains (for domain-based company inference)
         _free_domains = {"gmail", "yahoo", "hotmail", "outlook", "icloud",
                          "live", "msn", "uol", "bol", "terra", "ig", "protonmail",
                          "aol", "zoho", "yandex", "mail", "gmx", "tutanota"}
-        
+
+        # Step 1: trust probablepeople's Corporation classification first.
+        for i, (kind, _) in pp_results.items():
+            if i in consumed:
+                continue
+            if kind == "Corporation":
+                contact["company"] = lines[i].strip()
+                consumed.add(i)
+                break
+
         # Track potential company lines with confidence scores
         company_candidates = []
         
@@ -585,8 +642,9 @@ class OllamaVisionProvider(VisionProvider):
         # Sort candidates by confidence (highest first)
         company_candidates.sort(key=lambda x: x[2], reverse=True)
         
-        # Select the best candidate
-        if company_candidates:
+        # Select the best candidate (only if probablepeople didn't already
+        # set a Corporation match in step 1).
+        if not contact.get("company") and company_candidates:
             best_idx, best_line, best_conf = company_candidates[0]
             # Only accept if confidence is reasonable
             if best_conf >= 30:

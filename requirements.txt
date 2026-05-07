@@ -23,6 +23,7 @@ pillow>=10.3,<12           # Image manipulation (>=10.3 fixes CVE-2023-50447, Py
 pillow-heif>=0.13.0        # HEIC/HEIF support (iPhone photos)
 pyzbar==0.1.9              # QR/barcode detection
 phonenumbers>=8.13         # Google libphonenumber port — phone parsing/validation
+probablepeople>=0.5        # CRF-based Person/Corporation parser for OCR text
 pymupdf>=1.23.0            # PDF rendering (no poppler needed)
 
 # ============================================================================
