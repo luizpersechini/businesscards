@@ -27,7 +27,15 @@ _OCR_ONLY_MODELS = ("glm-ocr",)
 class OllamaVisionProvider(VisionProvider):
     """Ollama-based vision provider for local model inference."""
 
-    DEFAULT_VISION_MODELS = ['glm-ocr', 'llama3.2-vision', 'llava:13b', 'llava', 'bakllava', 'moondream']
+    DEFAULT_VISION_MODELS = [
+        'glm-ocr',          # OCR-specialised, default (#1 OmniDocBench)
+        'qwen2.5vl',        # Strong general VLM fallback (96.4% DocVQA, 88.8% OCRBench)
+        'llama3.2-vision',
+        'llava:13b',
+        'llava',
+        'bakllava',
+        'moondream',
+    ]
 
     def __init__(self, config: Optional[ProviderConfig] = None):
         if config is None:
@@ -56,7 +64,7 @@ class OllamaVisionProvider(VisionProvider):
             if resp.status_code == 200:
                 for m in resp.json().get("models", []):
                     name = m.get("name", "")
-                    if any(kw in name.lower() for kw in ["glm-ocr", "vision", "llava", "bakllava", "moondream"]):
+                    if any(kw in name.lower() for kw in ["glm-ocr", "qwen", "vision", "llava", "bakllava", "moondream"]):
                         return name
         except Exception:
             pass
@@ -91,7 +99,7 @@ class OllamaVisionProvider(VisionProvider):
 
                 # Any vision model installed?
                 for name in model_names:
-                    if any(kw in name.lower() for kw in ['glm-ocr', 'vision', 'llava', 'bakllava', 'moondream']):
+                    if any(kw in name.lower() for kw in ['glm-ocr', 'qwen', 'vision', 'llava', 'bakllava', 'moondream']):
                         self.config.model_name = name
                         return ProviderStatus.AVAILABLE
 
@@ -616,7 +624,7 @@ class OllamaVisionProvider(VisionProvider):
             response = requests.get(f"{self.api_url}/api/tags", timeout=3)
             if response.status_code == 200:
                 models = response.json().get('models', [])
-                vision_keywords = ['glm-ocr', 'vision', 'llava', 'bakllava', 'moondream']
+                vision_keywords = ['glm-ocr', 'qwen', 'vision', 'llava', 'bakllava', 'moondream']
                 return [
                     m['name'] for m in models
                     if any(kw in m['name'].lower() for kw in vision_keywords)
