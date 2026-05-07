@@ -161,6 +161,15 @@ class OllamaVisionProvider(VisionProvider):
                 }
             }
 
+            # For instruction-following LLM vision models (NOT pure OCR
+            # models), force the response to a JSON schema. Ollama >=0.5
+            # honours the `format` field as a JSON schema and constrains
+            # decoding so the output is guaranteed to parse.  This eliminates
+            # the multi-strategy fallback parsing in parse_json_response()
+            # for the happy path.
+            if not self._is_ocr_model():
+                payload["format"] = self._contact_json_schema()
+
             response = requests.post(
                 f"{self.api_url}/api/generate",
                 json=payload,
@@ -230,6 +239,26 @@ class OllamaVisionProvider(VisionProvider):
         """True for pure OCR models that output raw text, not JSON."""
         name = self.config.model_name.lower()
         return any(kw in name for kw in _OCR_ONLY_MODELS)
+
+    @staticmethod
+    def _contact_json_schema() -> Dict:
+        """JSON schema enforced by Ollama's `format` field for LLM vision
+        models. Mirrors the keys used by ContactInfo.from_legacy_dict so
+        existing downstream code keeps working unchanged."""
+        nullable_string = {"type": ["string", "null"]}
+        return {
+            "type": "object",
+            "additionalProperties": False,
+            "properties": {
+                key: nullable_string for key in [
+                    "firstName", "lastName", "fullName",
+                    "title", "company",
+                    "email", "phone", "mobile",
+                    "address", "city", "state", "zip", "country",
+                    "website", "linkedin", "notes",
+                ]
+            },
+        }
 
     @staticmethod
     def _build_ocr_prompt() -> str:
