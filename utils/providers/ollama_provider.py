@@ -11,7 +11,6 @@ Strategy:
 
 import re
 import time
-import json
 import requests
 import numpy as np
 from typing import Optional, Dict, List
@@ -306,33 +305,83 @@ class OllamaVisionProvider(VisionProvider):
                 break
 
         # ── Compile shared regexes ────────────────────────────────────────
+        # Improved company detection regex with better patterns
+        # 1. Company suffixes (must be at end of line or before punctuation)
+        # 2. Strong company indicators
+        # 3. Weak company indicators (need additional context)
         corp_re = re.compile(
-            r'\b(ltda|ltd|s\.?a\.?|inc\.?|corp\.?|group|grupo|banco|bank'
-            r'|consultoria|consulting|solucoes|solutions|tecnologia|technology'
-            r'|services|serviços|sistemas|systems|network|networks|global'
-            r'|associados|associates|partners|parceiros|agro|agência|agency'
-            r'|financeira|finance|seguros|insurance|saúde|health|clinic|clínica'
-            r'|construtora|construção|construction|imóveis|imobiliária|realty)\b',
+            # Company suffixes (strong indicators)
+            r'(?:^|\s)(?:ltda|ltd\.?|s\.?a\.?|inc\.?|corp\.?|corporation|incorporated|gmbh|ag|co\.?|plc|nv|spa|bv|ab|oyj)\.?\s*$',
+            re.I
+        )
+        company_strong_kw = re.compile(
+            # Strong company keywords (rarely appear in person names)
+            # Use (?:^|\W) and (?:\W|$) instead of \b so we match infix too
+            # (e.g. "bank" in "Citibank", "tech" in "Infotech")
+            r'(?:^|\W)(?:banco|bank|financeira|finance|seguros|insurance|holding'
+            r'|tecnologia|technology|sistemas|systems|construção|construction'
+            r'|imóveis|realty|imobiliária|agroindustrial|agrícola|mineração'
+            r'|petróleo|petroleum|energia|energy|telecomunicações|telecom'
+            r'|transportes|transport|logística|logistics|distribuição|distribution'
+            r'|varejo|retail|atacado|wholesale|indústria|industry|fábrica|factory'
+            r'|laboratório|laboratory|clínica|clinic|hospital|universidade|university'
+            r'|escola|school|faculdade|college|instituto|institute|centro|center'
+            r'|fundação|foundation|associação|association|cooperativa|cooperative'
+            r'|consórcio|consortium|conglomerado|conglomerate|multinacional|multinational'
+            # Well-known Brazilian and global bank/finance brands
+            r'|citibank|citi|bradesco|itau|itaú|santander|nubank|inter|caixa'
+            r'|bb\s+seguros|bancodo\s*brasil|banco\s+do\s+brasil'
+            r'|hsbc|jpmorgan|jpmc|morgan\s*stanley|goldman\s*sachs|deutsche'
+            r'|ubs|credit\s*suisse|barclays|bnp\s*paribas|societe\s*generale'
+            r'|btg\s*pactual|xp\s*investimentos|safra|bmg|pan\s+americano'
+            r'|merrill\s*lynch|wells\s*fargo|bank\s*of\s*america)(?:\W|$)',
+            re.I
+        )
+        company_weak_kw = re.compile(
+            # Weak company keywords (can appear in person names, titles, or companies)
+            # Use (?:^|\W) and (?:\W|$) instead of \b for infix matching
+            r'(?:^|\W)(?:consultoria|consulting|soluções|solutions|serviços|services'
+            r'|grupo|group|global|internacional|international|nacional|national'
+            r'|brasileira|brazilian|americana|american|europeia|european|mundial|worldwide'
+            r'|digital|online|web|software|hardware|cloud|data|info|media|marketing'
+            r'|comunicação|communication|publicidade|advertising|design|arquitetura|architecture'
+            r'|engenharia|engineering|projetos|projects|gestão|management|administração|administration'
+            r'|recursos|resources|capital|investimentos|investments|desenvolvimento|development'
+            r'|pesquisa|research|inovação|innovation|qualidade|quality|segurança|security)(?:\W|$)',
             re.I
         )
         title_kw = re.compile(
-            r'\b(gerente|diretor|director|manager|ceo|cto|cfo|coo|vp|vice.president'
-            r'|presidente|coordinator|coordenador|engenheiro|engineer'
+            r'\b(gerente|diretor|director|manager|ceo|cto|cfo|coo|cso|cmo|cpo'
+            r'|vp|vice.president|vice.presidente|president|presidente'
+            r'|coordinator|coordenador|engenheiro|engineer'
             r'|analista|analyst|consultor|consultant|vendas|sales|técnico|technician'
             r'|representative|representante|supervisor|especialista|specialist'
             r'|executive|executiv|account|associate|assistente|assistant'
-            r'|contador|accountant|advogado|lawyer|médico|doctor|enfermeiro)\b',
+            r'|contador|accountant|advogado|lawyer|médico|doctor|enfermeiro'
+            # English seniority / function words that appear in titles
+            r'|officer|chief|head|leader|principal|partner|founder|co-founder'
+            r'|chairman|treasurer|controller|strategist|advisor|adviser'
+            r'|developer|architect|scientist|researcher|analyst|intern'
+            r'|treasurer|director|managing|senior|junior|staff|lead'
+            # Finance / banking specific
+            r'|banker|trader|broker|underwriter|portfolio|relationship'
+            r'|structured|project\s+finance|corporate\s+development'
+            r'|treasury|securities|decarbonization|commercial)\b',
             re.I
         )
         # Brazilian ZIP (CEP): NNNNN-NNN — must NOT be treated as a phone number
         cep_re = re.compile(r'^\d{5}-\d{3}$')
 
         # ── Phone numbers ──────────────────────────────────────────────────
-        # Match common formats: +55 11 99999-9999, (11) 3456-7890, 555-1234, etc.
+        # Brazilian formats:
+        #   +55 (31) 99999-8888  /  55 31 99999 8888  /  (31) 3456-7890
+        #   5541 4009 5855       /  31 4009-5855
+        # International: +1 (555) 123-4567  /  +44 20 7946 0958
         phone_re = re.compile(
-            r'(?:\+\d{1,3}[\s.-]?)?'          # optional country code
-            r'(?:\(?\d{2,4}\)?[\s.-]?)?'       # optional area code
-            r'\d{3,5}[\s.-]?\d{3,5}'           # core digits
+            r'(?:\+?\d{1,3}[\s.-]?)?'          # optional country code (+55, 55)
+            r'(?:\(?\d{2,3}\)?[\s.-]?)?'        # optional area code ((31), 31)
+            r'\d{3,5}'                           # first block (3-5 digits)
+            r'(?:[\s.-]?\d{3,5})+'              # one or more additional blocks
         )
         phones_found: List[str] = []
         for i, line in enumerate(lines):
@@ -342,16 +391,17 @@ class OllamaVisionProvider(VisionProvider):
                 continue
             for m in phone_re.finditer(line):
                 candidate = m.group(0).strip()
-                # Must have at least 7 digits
-                if len(re.sub(r'\D', '', candidate)) < 7:
+                # Must have at least 8 digits (Brazilian landline minimum)
+                if len(re.sub(r'\D', '', candidate)) < 8:
                     continue
                 # Skip Brazilian ZIP codes (NNNNN-NNN, exactly 8 digits, no + or brackets)
                 if cep_re.match(candidate):
                     continue
-                # Also skip bare 8-digit sequences that look like CEP (no country/area prefix)
+                # Skip bare 8-digit sequences that look like CEP (5+3 pattern)
                 digits_only = re.sub(r'\D', '', candidate)
                 if len(digits_only) == 8 and not candidate.startswith(('+', '(')):
-                    continue
+                    if cep_re.match(candidate) or re.match(r'\d{5}[\s.-]?\d{3}', candidate):
+                        continue
                 phones_found.append(candidate)
                 consumed.add(i)
         if phones_found:
@@ -367,6 +417,58 @@ class OllamaVisionProvider(VisionProvider):
                 contact["zip"] = line.strip()
                 consumed.add(i)
                 break
+
+        # ── Address lines (street, city/state, country) ───────────────────
+        # Must run BEFORE company/name detection so address text is consumed
+        # and never mistaken for a company or name.
+        addr_kw_re = re.compile(
+            r'\b(?:av\.?|avenida|rua|r\.|alameda|al\.|travessa|tv\.'
+            r'|estrada|rodovia|blvd|boulevard|praça|pca\.'
+            r'|street|st\.|avenue|ave\.?|road|rd\.'
+            r'|drive|dr\.|lane|ln\.|suite|ste\.?|apt\.?|floor|fl\.?'
+            r'|andar|sala|cj\.?|conjunto|loja)\b',
+            re.I
+        )
+        # "City, ST" or "City - ST" patterns (2-letter state/province code)
+        city_state_re = re.compile(
+            r'^[A-ZÀ-Ú][A-Za-zÀ-ú\s\-]+(?:,\s*|-\s*)[A-Z]{2}$'
+        )
+        # Country: match only when the whole line IS the country name
+        # (prevents "Banco do Brasil" from triggering on "brasil")
+        country_re = re.compile(
+            r'^(?:brasil|brazil|usa|united\s+states|estados\s+unidos'
+            r'|argentina|portugal|mexico|méxico|chile|colômbia|colombia'
+            r'|france|germany|espanha|spain|italia|italy|canada)\s*$',
+            re.I
+        )
+
+        for i, line in enumerate(lines):
+            if i in consumed:
+                continue
+            if addr_kw_re.search(line):
+                if not contact["address"]:
+                    contact["address"] = line.strip()
+                consumed.add(i)
+
+        for i, line in enumerate(lines):
+            if i in consumed:
+                continue
+            stripped = line.strip()
+            if city_state_re.match(stripped):
+                parts = re.split(r',\s*|-\s*', stripped, 1)
+                if not contact["city"]:
+                    contact["city"] = parts[0].strip()
+                if len(parts) > 1 and not contact["state"]:
+                    contact["state"] = parts[1].strip()
+                consumed.add(i)
+
+        for i, line in enumerate(lines):
+            if i in consumed:
+                continue
+            if country_re.match(line.strip()):
+                if not contact["country"]:
+                    contact["country"] = line.strip()
+                consumed.add(i)
 
         # ── Name (first "person name" looking line) ────────────────────────
         # Pre-mark company-keyword lines so they don't get mistaken for names.
@@ -386,8 +488,8 @@ class OllamaVisionProvider(VisionProvider):
             # Skip all-caps lines — those are usually logos or department headers
             if line == line.upper() and len(line) > 3:
                 continue
-            # Skip lines that contain company or title keywords — those will be
-            # handled by company / title detection below
+            # Skip lines that contain company suffixes or title keywords
+            # Allow weak company keywords (they might be part of person names like "John Solutions")
             if corp_re.search(line) or title_kw.search(line):
                 continue
             # Must start with uppercase
@@ -406,29 +508,105 @@ class OllamaVisionProvider(VisionProvider):
                 consumed.add(i)
                 break
 
-        # ── Company (keyword match first, then fallback) ────────────────────
+        # ── Company detection (improved logic to avoid confusion with person names) ──
+        # Strategy:
+        # 1. Look for strong company indicators (suffixes like "Inc.", "Ltd.")
+        # 2. Look for lines with strong company keywords
+        # 3. Use position-based heuristics (companies often appear below names/titles)
+        # 4. Apply fallback logic with better person/company discrimination
+        
+        # Free email domains (for domain-based company inference)
+        _free_domains = {"gmail", "yahoo", "hotmail", "outlook", "icloud",
+                         "live", "msn", "uol", "bol", "terra", "ig", "protonmail",
+                         "aol", "zoho", "yandex", "mail", "gmx", "tutanota"}
+        
+        # Track potential company lines with confidence scores
+        company_candidates = []
+        
         for i, line in enumerate(lines):
             if i in consumed:
                 continue
-            if corp_re.search(line):
-                contact["company"] = line.strip()
-                consumed.add(i)
-                break
-
-        # Fallback: first unconsumed multi-word capitalized line that isn't a
-        # title phrase.  Skip all-caps lines (logos) and title-keyword lines.
-        if not contact["company"]:
-            candidates = [
-                lines[i] for i in range(len(lines))
-                if i not in consumed
-                and not re.search(r'\d', lines[i])
-                and len(lines[i].split()) >= 2
-                and lines[i] and lines[i][0].isupper()
-                and not (lines[i] == lines[i].upper() and len(lines[i]) > 3)
-                and not title_kw.search(lines[i])
-            ]
-            if candidates:
-                contact["company"] = candidates[0]
+            
+            line_stripped = line.strip()
+            confidence = 0
+            
+            # 1. Strong indicators: company suffixes at end of line
+            if corp_re.search(line_stripped):
+                confidence = 100  # Very high confidence
+                company_candidates.append((i, line_stripped, confidence))
+                continue
+            
+            # 2. Strong company keywords in line
+            if company_strong_kw.search(line_stripped):
+                confidence = 80  # High confidence
+                # Bonus if line contains multiple words (less likely to be person name)
+                if len(line_stripped.split()) >= 2:
+                    confidence += 10
+                company_candidates.append((i, line_stripped, confidence))
+                continue
+            
+            # 3. Weak company keywords - lower confidence
+            if company_weak_kw.search(line_stripped):
+                confidence = 40  # Medium confidence
+                company_candidates.append((i, line_stripped, confidence))
+                continue
+            
+            # 4. Position-based heuristic: lines after name/title are more likely companies
+            # Find if we already detected a name or title before this line
+            has_name_before = any(j < i and (lines[j] in consumed or 
+                                            (contact.get("firstName") and 
+                                             lines[j].find(contact["firstName"]) >= 0)) 
+                                 for j in range(max(0, i-3), i))
+            has_title_before = any(j < i and title_kw.search(lines[j]) for j in range(max(0, i-2), i))
+            
+            if has_name_before or has_title_before:
+                # This line appears after name/title - could be company
+                # Check if it looks like a company (not like a person name)
+                words = line_stripped.split()
+                if 1 <= len(words) <= 4:  # Companies often 1-4 words
+                    # Person names usually 2-3 words, rarely 4
+                    # Companies can be single words (Apple, Google) or multi-word
+                    if len(words) == 1:
+                        # Single word - could be company or last name
+                        # Check if it looks like a common last name vs company
+                        common_last_names = {'silva', 'santos', 'oliveira', 'souza', 'rodrigues', 
+                                           'ferreira', 'alves', 'pereira', 'lima', 'gomes', 
+                                           'ribeiro', 'martins', 'carvalho', 'almeida', 'lopes',
+                                           'smith', 'johnson', 'williams', 'brown', 'jones',
+                                           'garcia', 'miller', 'davis', 'rodriguez', 'martinez'}
+                        if line_stripped.lower() not in common_last_names:
+                            confidence = 30
+                            company_candidates.append((i, line_stripped, confidence))
+                    elif len(words) >= 2:
+                        # Multi-word - less likely to be person name (except with middle names)
+                        # Check if words are all capitalized (common for company names)
+                        if all(word and word[0].isupper() for word in words):
+                            confidence = 50
+                            company_candidates.append((i, line_stripped, confidence))
+        
+        # Sort candidates by confidence (highest first)
+        company_candidates.sort(key=lambda x: x[2], reverse=True)
+        
+        # Select the best candidate
+        if company_candidates:
+            best_idx, best_line, best_conf = company_candidates[0]
+            # Only accept if confidence is reasonable
+            if best_conf >= 30:
+                contact["company"] = best_line
+                consumed.add(best_idx)
+        
+        # Fallback: if no company found, use domain inference from email
+        if not contact["company"] and contact.get("email"):
+            try:
+                domain_stem = contact["email"].split("@")[1].split(".")[0].lower()
+                if domain_stem and domain_stem not in _free_domains:
+                    # Short stems (≤ 3 chars) stay ALL-CAPS; longer ones are Title-cased
+                    contact["company"] = (
+                        domain_stem.upper() if len(domain_stem) <= 3
+                        else domain_stem.capitalize()
+                    )
+            except (IndexError, AttributeError):
+                pass
 
         return contact
 

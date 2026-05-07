@@ -13,7 +13,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from utils.models import (
     ContactInfo, Address, ScanResult, BatchScanResult,
-    ProviderType, ProviderStatus, ProviderConfig, AppConfig
+    ProviderType, ProviderConfig
 )
 
 # Compatibility: allow running with or without pytest
@@ -351,8 +351,6 @@ if __name__ == "__main__":
     else:
         # Run with unittest as fallback
         # Convert pytest-style classes to unittest
-        import types
-
         loader = unittest.TestLoader()
         suite = unittest.TestSuite()
 

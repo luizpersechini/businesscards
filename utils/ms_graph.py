@@ -13,12 +13,10 @@ Required Azure AD App Registration:
 Install: pip install msal requests
 """
 
-import json
 import os
 import time
 import logging
 from typing import Optional, Dict, List
-from pathlib import Path
 
 import requests
 

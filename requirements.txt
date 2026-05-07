@@ -9,20 +9,29 @@
 # - Optional cloud fallbacks
 
 # ============================================================================
+# WEB SERVER (FastAPI frontend)
+# ============================================================================
+fastapi>=0.111.0           # FastAPI web framework
+uvicorn[standard]>=0.29.0  # ASGI server
+python-multipart>=0.0.9   # multipart/form-data upload support
+
+# ============================================================================
 # CORE UI & COMPUTER VISION
 # ============================================================================
-streamlit>=1.28.0          # Web UI framework
+streamlit>=1.28.0          # Web UI framework (legacy; new UI uses FastAPI)
 opencv-python==4.8.1.78    # Image processing
-pillow>=10.3,<12           # Image manipulation (>=10.3 fixes CVE-2023-50447)
+pillow>=10.3,<12           # Image manipulation (>=10.3 fixes CVE-2023-50447, Python 3.13 compatible)
+pillow-heif>=0.13.0        # HEIC/HEIF support (iPhone photos)
 pyzbar==0.1.9              # QR/barcode detection
+pymupdf>=1.23.0            # PDF rendering (no poppler needed)
 
 # ============================================================================
 # DATA PROCESSING & EXPORT
 # ============================================================================
-numpy>=1.26,<3             # Numerical computing
-pandas==2.0.3              # Data manipulation and CSV operations
-openpyxl==3.1.2            # Excel file generation
-vobject==0.9.7             # VCF (vCard) generation
+numpy>=1.26,<3             # Numerical computing (Python 3.13 compatible)
+pandas>=2.0.0              # Data manipulation and CSV operations
+openpyxl>=3.1.0            # Excel file generation
+vobject>=0.9.0             # VCF (vCard) generation
 
 # ============================================================================
 # DATA VALIDATION & CONFIGURATION
@@ -35,6 +44,8 @@ vobject==0.9.7             # VCF (vCard) generation
 # ============================================================================
 requests==2.31.0           # Synchronous HTTP client
                            # Still used by Ollama provider for legacy compatibility
+urllib3<2,>=1.21.1         # HTTP library - pinned for macOS LibreSSL compatibility
+                           # urllib3 v2+ requires OpenSSL 1.1.1+, macOS has LibreSSL
 httpx>=0.24.0              # Async/sync HTTP client
                            # Primary client for new cloud provider integrations
 
@@ -49,11 +60,26 @@ openai>=1.0.0              # OpenAI API client
                            # Optional cloud fallback for vision extraction
 
 # ============================================================================
+# OCR SUPPORT
+# ============================================================================
+pytesseract>=0.3.10        # Tesseract OCR wrapper
+# Note: Tesseract OCR engine must be installed separately:
+# macOS: brew install tesseract
+# Ubuntu/Debian: apt-get install tesseract-ocr
+# Windows: Download from GitHub
+
+# ============================================================================
+# MEMORY OPTIMIZATION
+# ============================================================================
+psutil>=5.9.0              # System and process utilities
+                           # Used for memory monitoring and optimization
+
+# ============================================================================
 # DEVELOPMENT & TESTING
 # ============================================================================
-# Uncomment for development:
-# pytest>=7.4.0
-# pytest-cov>=4.1.0
-# black>=23.0.0
-# mypy>=1.4.0
-# ruff>=0.1.0
+pytest>=7.4.0              # Testing framework
+pytest-cov>=4.1.0          # Coverage reporting
+responses>=0.24.0          # Mock HTTP responses for testing
+black>=23.0.0              # Code formatter
+mypy>=1.4.0                # Type checking
+ruff>=0.1.0                # Linter

@@ -26,10 +26,12 @@ fi
 echo ""
 echo "🚀 Starting application..."
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo "   http://localhost:8501"
 echo ""
 
-# Start the app
-python3 -m streamlit run app.py
+# Start the new FastAPI + React UI (replaces Streamlit)
+python3 -m uvicorn server:app --host 0.0.0.0 --port 8501 --reload
 
-# Note: App will open automatically in your browser
+# Legacy fallback — uncomment to use the old Streamlit UI instead:
+# python3 -m streamlit run app.py
 

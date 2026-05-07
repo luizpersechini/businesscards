@@ -7,7 +7,6 @@ Based on industry best practices from PyImageSearch and OpenCV documentation.
 import cv2
 import numpy as np
 from typing import List, Tuple
-from PIL import Image
 import imutils
 
 
@@ -31,155 +30,103 @@ class ImprovedCardDetector:
         """
         Detect business cards using advanced document scanning techniques.
         Filters out QR codes and logos.
-        
+
+        Uses multiple edge-detection strategies tried sequentially on the
+        contrast-enhanced image so that clean PDF scans and noisy photos
+        are both handled well.
+
         Args:
             image: Input image as numpy array (BGR format)
-            
+
         Returns:
             List of tuples (card_image, contour) for each detected cards
         """
         original = image.copy()
         orig_height, orig_width = image.shape[:2]
         image_area = orig_height * orig_width
-        
+
         # Calculate area thresholds based on percentage
         min_area = int(image_area * (self.min_area_percent / 100))
         max_area = int(image_area * (self.max_area_percent / 100))
-        
+
         # Resize for better processing
         ratio = image.shape[0] / 500.0
         resized = imutils.resize(image, height=500)
         resized_area = resized.shape[0] * resized.shape[1]
-        
+
         # Scale area thresholds for resized image
         min_area_resized = int(min_area / (ratio * ratio))
         max_area_resized = int(max_area / (ratio * ratio))
-        
+
         # Convert to grayscale
         gray = cv2.cvtColor(resized, cv2.COLOR_BGR2GRAY)
-        
+
+        # ── Contrast enhancement (crucial for clean PDF / white-on-white scans) ──
+        clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+        gray = clahe.apply(gray)
+
         # Apply Gaussian blur
         blurred = cv2.GaussianBlur(gray, (5, 5), 0)
-        
-        # Try multiple edge detection strategies for better grid detection
-        # Strategy 1: Canny with lower threshold
-        edged1 = cv2.Canny(blurred, 30, 100)
-        
-        # Strategy 2: Adaptive thresholding (better for grids)
-        edged2 = cv2.adaptiveThreshold(blurred, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, 
-                                       cv2.THRESH_BINARY_INV, 11, 2)
-        
-        # Combine both strategies
-        edged = cv2.bitwise_or(edged1, edged2)
-        
-        # Dilate edges to close gaps
-        kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
-        edged = cv2.dilate(edged, kernel, iterations=1)
-        edged = cv2.erode(edged, kernel, iterations=1)
-        
-        # Find contours
-        contours = cv2.findContours(edged.copy(), cv2.RETR_LIST, cv2.CHAIN_APPROX_SIMPLE)
-        contours = imutils.grab_contours(contours)
-        contours = sorted(contours, key=cv2.contourArea, reverse=True)
-        
-        detected_cards = []
-        used_regions = []
-        
-        # Loop through contours
-        for c in contours[:50]:  # Check top 50 contours (increased for grids)
-            # Get area first to filter early
-            area = cv2.contourArea(c)
-            
-            # Filter by area (excludes small QR codes and logos)
-            if area < min_area_resized or area > max_area_resized:
-                continue
-            
-            # Approximate the contour
-            peri = cv2.arcLength(c, True)
-            approx = cv2.approxPolyDP(c, 0.02 * peri, True)
-            
-            # Business cards should have 4-8 corners (more flexible for grids)
-            if len(approx) < 4 or len(approx) > 8:
-                continue
-            
-            # Get bounding rectangle
-            x, y, w, h = cv2.boundingRect(approx)
-            
-            # Check aspect ratio (business cards are typically 1.586:1)
-            # Standard: 85.6mm x 53.98mm
-            # More flexible range for grid layouts
-            aspect_ratio = float(w) / h if h > 0 else 0
-            
-            # QR codes are square (1:1), logos vary but cards are specific
-            # Relaxed constraints for better grid detection
-            if not (1.2 < aspect_ratio < 2.2 or 0.45 < aspect_ratio < 0.85):
-                continue
-            
-            # Check extent (how much of bounding box is filled)
-            # Business cards fill their bounding box well
-            # QR codes and logos may not
-            extent = area / (w * h) if (w * h) > 0 else 0
-            if extent < 0.70:  # Relaxed from 0.75 to 0.70
-                continue
-            
-            # Check if this overlaps with already detected cards
-            # Reduced overlap threshold for better grid detection
-            overlaps = False
-            for used_x, used_y, used_w, used_h in used_regions:
-                x_overlap = max(0, min(x + w, used_x + used_w) - max(x, used_x))
-                y_overlap = max(0, min(y + h, used_y + used_h) - max(y, used_y))
-                overlap_area = x_overlap * y_overlap
-                
-                # Reduced from 0.3 to 0.2 (20% overlap allowed)
-                if overlap_area > (w * h * 0.2):
-                    overlaps = True
-                    break
-            
-            if overlaps:
-                continue
-            
-            # Apply perspective transform to get card
-            # Scale points back to original image
-            if len(approx) == 4:
-                # Use 4-point transform for perfect rectangles
-                pts = approx.reshape(4, 2) * ratio
-                card_warped = self.four_point_transform(original, pts)
-            else:
-                # Use bounding box for non-perfect rectangles
-                x_orig = int(x * ratio)
-                y_orig = int(y * ratio)
-                w_orig = int(w * ratio)
-                h_orig = int(h * ratio)
-                
-                # Add small padding
-                padding = 5
-                y1 = max(0, y_orig - padding)
-                y2 = min(original.shape[0], y_orig + h_orig + padding)
-                x1 = max(0, x_orig - padding)
-                x2 = min(original.shape[1], x_orig + w_orig + padding)
-                
-                card_warped = original[y1:y2, x1:x2]
-            
-            if card_warped is not None and card_warped.shape[0] > 100 and card_warped.shape[1] > 100:
-                detected_cards.append((card_warped, c))
-                used_regions.append((x, y, w, h))
-        
+
+        # ── Multi-strategy edge detection ──────────────────────────────────
+        # Try each strategy independently and take the best result (most cards).
+        # This is critical because combining them with bitwise_or produces
+        # too much noise on clean scans while missing faint card edges.
+
+        strategies = [
+            # Strategy A: Canny with lower thresholds (good for faint edges on clean scans)
+            ("canny_low", cv2.Canny(blurred, 20, 80)),
+            # Strategy B: Canny with standard thresholds
+            ("canny_mid",  cv2.Canny(blurred, 40, 120)),
+            # Strategy C: Canny with higher thresholds (fewer false positives)
+            ("canny_high", cv2.Canny(blurred, 60, 150)),
+            # Strategy D: Adaptive threshold (excellent for grid lines on clean scans)
+            ("adaptive", cv2.adaptiveThreshold(blurred, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+                                               cv2.THRESH_BINARY_INV, 15, 3)),
+        ]
+
+        # Dilate/erode kernel — larger for clean scans to bridge thin gaps
+        kernel_small = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
+        kernel_med   = cv2.getStructuringElement(cv2.MORPH_RECT, (5, 5))
+
+        best_cards: List[Tuple[np.ndarray, np.ndarray]] = []
+
+        for _strat_name, edge_map in strategies:
+            # Morphological close to bridge small gaps in edges
+            closed = cv2.morphologyEx(edge_map, cv2.MORPH_CLOSE, kernel_med, iterations=1)
+            # Dilate to thicken edges, then erode to reduce noise
+            dilated = cv2.dilate(closed, kernel_small, iterations=1)
+            eroded  = cv2.erode(dilated, kernel_small, iterations=1)
+
+            cards = self._contours_to_cards(
+                eroded, original, resized, ratio,
+                min_area_resized, max_area_resized
+            )
+            if len(cards) > len(best_cards):
+                best_cards = cards
+
+        detected_cards = best_cards
+
+        # ── Fallbacks ──────────────────────────────────────────────────────
         # If contour detection found fewer than 4 cards, try edge-density
-        # grid detection.  Scanned pages with cards in a sleeve often defeat
-        # contour methods because the sleeve gaps merge with card edges.
+        # grid detection.
         if len(detected_cards) < 4:
             grid_cards = self._detect_grid_by_gaps(original)
             if len(grid_cards) > len(detected_cards):
                 detected_cards = grid_cards
 
-        # If both methods still found fewer than 4 cards, try a pure
-        # aspect-ratio-based uniform grid split as a reliable last resort.
+        # Last resort: uniform grid split, but filter blank cells
         if len(detected_cards) < 4:
             uniform_cards = self._uniform_grid_split(original)
-            if len(uniform_cards) > len(detected_cards):
-                detected_cards = uniform_cards
+            # Filter cells that are mostly blank (plain white/black background)
+            filtered_uniform = [
+                (cell, None) for cell, _ in uniform_cards
+                if not _is_blank_cell(cell)
+            ]
+            if len(filtered_uniform) > len(detected_cards):
+                detected_cards = filtered_uniform
 
-        # If no cards found with either method, try simpler bounding box
+        # If no cards found, try simpler bounding box fallback
         if len(detected_cards) == 0:
             detected_cards = self._fallback_detection(original)
 
@@ -188,6 +135,74 @@ class ImprovedCardDetector:
             detected_cards.append((original, None))
 
         return detected_cards
+
+    def _contours_to_cards(self, edge_image: np.ndarray, original: np.ndarray,
+                           resized: np.ndarray, ratio: float,
+                           min_area_resized: int, max_area_resized: int
+                           ) -> List[Tuple[np.ndarray, np.ndarray]]:
+        """Extract card regions from a preprocessed edge image via contour analysis."""
+        contours = cv2.findContours(edge_image, cv2.RETR_LIST, cv2.CHAIN_APPROX_SIMPLE)
+        contours = imutils.grab_contours(contours)
+        contours = sorted(contours, key=cv2.contourArea, reverse=True)
+
+        cards: List[Tuple[np.ndarray, np.ndarray]] = []
+        used_regions: List[Tuple[int, int, int, int]] = []
+
+        for c in contours[:80]:
+            area = cv2.contourArea(c)
+            if area < min_area_resized or area > max_area_resized:
+                continue
+
+            peri = cv2.arcLength(c, True)
+            approx = cv2.approxPolyDP(c, 0.02 * peri, True)
+
+            if len(approx) < 4 or len(approx) > 8:
+                continue
+
+            x, y, w, h = cv2.boundingRect(approx)
+            aspect_ratio = float(w) / h if h > 0 else 0
+
+            if not (1.2 < aspect_ratio < 2.2 or 0.45 < aspect_ratio < 0.85):
+                continue
+
+            extent = area / (w * h) if (w * h) > 0 else 0
+            if extent < 0.65:
+                continue
+
+            # Overlap check
+            overlaps = False
+            for ux, uy, uw, uh in used_regions:
+                x_overlap = max(0, min(x + w, ux + uw) - max(x, ux))
+                y_overlap = max(0, min(y + h, uy + uh) - max(y, uy))
+                if x_overlap * y_overlap > (w * h * 0.2):
+                    overlaps = True
+                    break
+            if overlaps:
+                continue
+
+            # Extract card
+            if len(approx) == 4:
+                pts = approx.reshape(4, 2) * ratio
+                card_warped = self.four_point_transform(original, pts)
+            else:
+                x_orig = int(x * ratio)
+                y_orig = int(y * ratio)
+                w_orig = int(w * ratio)
+                h_orig = int(h * ratio)
+                padding = 5
+                y1 = max(0, y_orig - padding)
+                y2 = min(original.shape[0], y_orig + h_orig + padding)
+                x1 = max(0, x_orig - padding)
+                x2 = min(original.shape[1], x_orig + w_orig + padding)
+                card_warped = original[y1:y2, x1:x2]
+
+            if card_warped is not None and card_warped.shape[0] > 80 and card_warped.shape[1] > 80:
+                cards.append((card_warped, c))
+                used_regions.append((x, y, w, h))
+
+        return cards
+
+    # ... existing code for four_point_transform, _uniform_grid_split, etc. follows ...
 
     def _uniform_grid_split(self, image: np.ndarray) -> List[Tuple[np.ndarray, None]]:
         """
@@ -477,4 +492,42 @@ class ImprovedCardDetector:
         rect[3] = pts[np.argmax(diff)]
         
         return rect
+
+
+# ── Module-level helpers ────────────────────────────────────────────────────
+
+def _is_blank_cell(image: np.ndarray, std_threshold: float = 25.0,
+                   white_threshold: float = 0.92) -> bool:
+    """
+    Return True if the cell is mostly blank — uniform white, black, or
+    nearly uniform colour.  Used to filter empty cells from uniform grid
+    splits on PDF pages where only every Nth cell has a card.
+
+    Checks:
+      - Very low standard deviation (uniform colour)
+      - AND very high fraction of white pixels (> 92%)
+      → definitely blank
+    """
+    if image is None or image.size == 0:
+        return True
+    if len(image.shape) == 3:
+        gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+    else:
+        gray = image
+
+    h, w = gray.shape[:2]
+    if h < 20 or w < 20:
+        return True
+
+    std_val = float(np.std(gray))
+    if std_val < std_threshold:
+        return True
+
+    # Check white pixel fraction
+    white_pixels = np.sum(gray > 230)
+    total_pixels = gray.size
+    if white_pixels / total_pixels > white_threshold:
+        return True
+
+    return False
 

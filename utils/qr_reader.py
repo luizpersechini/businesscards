@@ -123,6 +123,11 @@ class QRReader:
         """
         candidates: List[np.ndarray] = []
 
+        # ── Original BGR (no conversion — highest fidelity) ───────────────
+        if len(image.shape) == 3:
+            candidates.append(image)          # original BGR
+            candidates.append(cv2.cvtColor(image, cv2.COLOR_BGR2RGB))  # RGB swap
+
         # ── Grayscale base ────────────────────────────────────────────────
         if len(image.shape) == 3:
             gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
@@ -239,7 +244,7 @@ class QRReader:
         for img in images_to_try:
             try:
                 # detectAndDecode for single QR code
-                data, bbox, _ = self.opencv_detector.detectAndDecode(img)
+                data, bbox, _ = detector.detectAndDecode(img)
                 
                 if data and bbox is not None:
                     # Convert bbox to integer coordinates
@@ -269,7 +274,7 @@ class QRReader:
         # Try detectMulti for multiple QR codes (if available)
         if not results:
             try:
-                retval, decoded_info, points, _ = self.opencv_detector.detectAndDecodeMulti(gray)
+                retval, decoded_info, points, _ = detector.detectAndDecodeMulti(img)
                 
                 if retval and decoded_info:
                     for i, data in enumerate(decoded_info):

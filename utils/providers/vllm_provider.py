@@ -4,8 +4,6 @@ Supports vLLM's OpenAI-compatible API for serving local vision models.
 """
 
 import time
-import json
-import base64
 import requests
 import numpy as np
 from typing import Optional, Dict, List

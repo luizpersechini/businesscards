@@ -8,9 +8,8 @@ When pydantic is available, models gain automatic validation.
 
 import re
 from dataclasses import dataclass, field
-from typing import Optional, List, Dict, Any
+from typing import Optional, List, Dict
 from enum import Enum
-from datetime import datetime
 
 
 # ============================================================

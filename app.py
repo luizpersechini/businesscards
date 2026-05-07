@@ -14,11 +14,14 @@ from io import BytesIO
 import zipfile
 from datetime import datetime
 from typing import Any, Dict, List, Tuple, Optional
+from textwrap import dedent
+import requests
 
 # Add utils to path
 sys.path.append(os.path.dirname(__file__))
 
 from utils.improved_card_detector import ImprovedCardDetector
+from utils.improved_card_detector import _is_blank_cell  # blank-cell filter for PDF grids
 from utils.qr_reader import QRReader
 from utils.providers.factory import ProviderFactory
 from utils.providers.base import VisionProvider
@@ -27,6 +30,22 @@ from utils.ms_graph import MSGraphContactManager
 from utils.vcf_generator import VCFGenerator
 from utils.export_processor import ExportProcessor
 from utils.history_manager import HistoryManager
+from utils.contacts_repository import ContactsRepository
+from utils.performance_monitor import get_performance_monitor, measure_performance
+
+# Optional OCR support for scanned documents
+try:
+    from utils.ocr_processor import OCRProcessor, is_ocr_available
+    OCR_AVAILABLE = is_ocr_available()
+except ImportError:
+    OCR_AVAILABLE = False
+
+# Optional PDF support — renders PDF pages to images via PyMuPDF (no poppler needed)
+try:
+    import fitz as _fitz
+    HAS_PDF_SUPPORT = True
+except ImportError:
+    HAS_PDF_SUPPORT = False
 
 
 # Page configuration
@@ -37,45 +56,20 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# Custom CSS for better styling
+# Load custom CSS for modern design
+with open('assets/custom.css', 'r') as f:
+    custom_css = f.read()
+st.markdown(f'<style>{custom_css}</style>', unsafe_allow_html=True)
+
+# Load Inter font from Google Fonts
 st.markdown("""
-<style>
-    .main-header {
-        font-size: 2.5rem;
-        font-weight: bold;
-        color: #1f77b4;
-        text-align: center;
-        margin-bottom: 2rem;
-    }
-    .step-header {
-        font-size: 1.5rem;
-        font-weight: bold;
-        color: #2ca02c;
-        margin-top: 1rem;
-        margin-bottom: 0.5rem;
-    }
-    .status-success {
-        color: #2ca02c;
-        font-weight: bold;
-    }
-    .status-processing {
-        color: #ff7f0e;
-        font-weight: bold;
-    }
-    .status-warning {
-        color: #d62728;
-        font-weight: bold;
-    }
-    .contact-preview {
-        background-color: #f0f2f6;
-        padding: 1rem;
-        border-radius: 0.5rem;
-        margin: 0.5rem 0;
-    }
-</style>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
 """, unsafe_allow_html=True)
 
 history_manager = HistoryManager()
+contacts_repo = ContactsRepository()
 
 # Initialize provider factory (LOCAL-FIRST priority)
 provider_factory = ProviderFactory()
@@ -144,12 +138,314 @@ def initialize_session_state():
         st.session_state.outlook_auth_code = None    # user_code to display
     if 'outlook_auth_uri' not in st.session_state:
         st.session_state.outlook_auth_uri = None     # verification_uri
+    # Contacts Repository panel state
+    if 'contacts_repo_search' not in st.session_state:
+        st.session_state.contacts_repo_search = ""
+    if 'contacts_repo_delete_queue' not in st.session_state:
+        st.session_state.contacts_repo_delete_queue = set()
+    if 'contacts_repo_view' not in st.session_state:
+        st.session_state.contacts_repo_view = None  # expanded contact id
+    if 'contacts_repo_group_by' not in st.session_state:
+        st.session_state.contacts_repo_group_by = True  # group by company
+
 
 
 def load_image(uploaded_file):
     """Load an uploaded image file."""
     image = Image.open(uploaded_file)
     return np.array(image)
+
+
+@measure_performance("pdf_pages_to_images")
+def pdf_pages_to_images(
+    pdf_file: BytesIO, 
+    dpi: int = 200,
+    max_width: int = 1920,
+    max_height: int = 1080,
+    quality: int = 85,
+    memory_optimized: bool = False
+) -> List[BytesIO]:
+    """
+    Convert each page of a PDF into an in-memory PNG BytesIO with automatic resizing.
+    
+    Args:
+        pdf_file: PDF file as BytesIO
+        dpi: DPI for rendering (default: 200)
+        max_width: Maximum width for resizing (default: 1920)
+        max_height: Maximum height for resizing (default: 1080)
+        quality: JPEG quality for compression (1-100, default: 85)
+        memory_optimized: Use memory-optimized processing for large PDFs
+        
+    Returns:
+        List of BytesIO objects that mimic uploaded file handles.
+        Each is named '<original>_page_<N>.png'.
+    """
+    if memory_optimized:
+        return _pdf_pages_to_images_memory_optimized(
+            pdf_file, dpi, max_width, max_height, quality
+        )
+    else:
+        return _pdf_pages_to_images_standard(
+            pdf_file, dpi, max_width, max_height, quality
+        )
+
+
+def _pdf_pages_to_images_standard(
+    pdf_file: BytesIO, 
+    dpi: int = 200,
+    max_width: int = 1920,
+    max_height: int = 1080,
+    quality: int = 85
+) -> List[BytesIO]:
+    pages = []
+    base_name = getattr(pdf_file, 'name', 'document')
+    # Strip .pdf extension for naming
+    if base_name.lower().endswith('.pdf'):
+        base_name = base_name[:-4]
+
+    doc = _fitz.open(stream=pdf_file.read(), filetype="pdf")
+    zoom = dpi / 72.0  # PDF default is 72 DPI
+    mat = _fitz.Matrix(zoom, zoom)
+
+    for page_num in range(len(doc)):
+        page = doc.load_page(page_num)
+        pix = page.get_pixmap(matrix=mat)
+        
+        # Convert to PIL Image for resizing
+        img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
+        
+        # Check if image needs resizing
+        needs_resize = pix.width > max_width or pix.height > max_height
+        
+        if needs_resize:
+            # Calculate new dimensions while maintaining aspect ratio
+            width_ratio = max_width / pix.width
+            height_ratio = max_height / pix.height
+            ratio = min(width_ratio, height_ratio)
+            
+            new_width = int(pix.width * ratio)
+            new_height = int(pix.height * ratio)
+            
+            # Resize image
+            img = img.resize((new_width, new_height), Image.Resampling.LANCZOS)
+            
+            # Log resize information
+            st.session_state.setdefault('pdf_debug_info', []).append({
+                'page': page_num + 1,
+                'original_size': f"{pix.width}x{pix.height}",
+                'resized_to': f"{new_width}x{new_height}",
+                'reduction_percent': int((1 - ratio) * 100)
+            })
+        
+        # Save to BytesIO with optimization
+        img_bytes = BytesIO()
+        
+        # Use JPEG for scanned documents (better compression), PNG for text
+        # Check if it's likely a scanned document (image-heavy)
+        text = page.get_text()
+        is_scanned = len(text.strip()) < 50  # Minimal text suggests scanned document
+        
+        if is_scanned and quality < 100:
+            # Use JPEG for scanned documents with specified quality
+            img.save(img_bytes, format='JPEG', quality=quality, optimize=True)
+            img_bytes.name = f"{base_name}_page_{page_num + 1}.jpg"
+        else:
+            # Use PNG for text documents (lossless)
+            img.save(img_bytes, format='PNG', optimize=True)
+            img_bytes.name = f"{base_name}_page_{page_num + 1}.png"
+        
+        pages.append(img_bytes)
+
+    doc.close()
+    return pages
+
+
+def _pdf_pages_to_images_memory_optimized(
+    pdf_file: BytesIO, 
+    dpi: int = 200,
+    max_width: int = 1920,
+    max_height: int = 1080,
+    quality: int = 85
+) -> List[BytesIO]:
+    """
+    Memory-optimized version for large PDFs.
+    Processes pages one at a time with garbage collection.
+    
+    Args:
+        pdf_file: PDF file as BytesIO
+        dpi: DPI for rendering
+        max_width: Maximum width for resizing
+        max_height: Maximum height for resizing
+        quality: JPEG quality for compression
+        
+    Returns:
+        List of BytesIO objects containing rendered images
+    """
+    pages = []
+    base_name = getattr(pdf_file, 'name', 'document')
+    # Strip .pdf extension for naming
+    if base_name.lower().endswith('.pdf'):
+        base_name = base_name[:-4]
+    
+    try:
+        # Try to import memory optimizer
+        from utils.pdf_memory_optimizer import process_large_pdf_safely
+        
+        def process_page(page, page_num):
+            """Process single page with memory cleanup."""
+            zoom = dpi / 72.0
+            mat = _fitz.Matrix(zoom, zoom)
+            pix = page.get_pixmap(matrix=mat)
+            
+            # Convert to PIL Image for resizing
+            img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
+            
+            # Check if image needs resizing
+            needs_resize = pix.width > max_width or pix.height > max_height
+            
+            if needs_resize:
+                # Calculate new dimensions while maintaining aspect ratio
+                width_ratio = max_width / pix.width
+                height_ratio = max_height / pix.height
+                ratio = min(width_ratio, height_ratio)
+                
+                new_width = int(pix.width * ratio)
+                new_height = int(pix.height * ratio)
+                
+                # Resize image
+                img = img.resize((new_width, new_height), Image.Resampling.LANCZOS)
+            
+            # Save to BytesIO
+            img_bytes = BytesIO()
+            
+            # Check if it's likely a scanned document
+            text = page.get_text()
+            is_scanned = len(text.strip()) < 50
+            
+            if is_scanned and quality < 100:
+                # Use JPEG for scanned documents
+                img.save(img_bytes, format='JPEG', quality=quality, optimize=True)
+                img_bytes.name = f"{base_name}_page_{page_num + 1}.jpg"
+            else:
+                # Use PNG for text documents
+                img.save(img_bytes, format='PNG', optimize=True)
+                img_bytes.name = f"{base_name}_page_{page_num + 1}.png"
+            
+            # Cleanup
+            del pix
+            del img
+            
+            return img_bytes
+        
+        # Process with memory control
+        pages = process_large_pdf_safely(pdf_file, process_page, max_memory_mb=1024)
+        
+    except ImportError:
+        # Fall back to standard processing if memory optimizer not available
+        st.warning("⚠️ Memory optimizer not available, using standard processing")
+        return _pdf_pages_to_images_standard(pdf_file, dpi, max_width, max_height, quality)
+    
+    except Exception as e:
+        st.error(f"❌ Memory-optimized processing failed: {e}")
+        # Fall back to standard processing
+        return _pdf_pages_to_images_standard(pdf_file, dpi, max_width, max_height, quality)
+    
+    return pages
+
+
+@measure_performance("process_pdf_with_ocr")
+def process_pdf_with_ocr(
+    pdf_file: BytesIO,
+    ocr_language: str = "por+eng",
+    ocr_confidence_threshold: float = 70.0
+) -> Dict:
+    """
+    Process PDF with OCR to extract text from scanned documents.
+    
+    Args:
+        pdf_file: PDF file as BytesIO
+        ocr_language: Language for OCR recognition
+        ocr_confidence_threshold: Minimum confidence for OCR results
+        
+    Returns:
+        Dictionary with OCR results and extracted contacts
+    """
+    if not OCR_AVAILABLE:
+        return {
+            "success": False,
+            "error": "OCR not available",
+            "contacts": []
+        }
+    
+    try:
+        # Create OCR processor
+        ocr_processor = OCRProcessor(language=ocr_language)
+        
+        # Convert PDF to images
+        pdf_images = pdf_pages_to_images(
+            pdf_file,
+            dpi=200,  # Lower DPI for OCR - faster processing
+            max_width=1600,
+            max_height=1200,
+            quality=85
+        )
+        
+        # Perform OCR on each page
+        ocr_results = ocr_processor.extract_text_from_pdf_images(pdf_images)
+        
+        # Extract structured contacts
+        contacts = ocr_processor.extract_structured_contacts(ocr_results)
+        
+        # Filter by confidence threshold
+        filtered_contacts = [
+            contact for contact in contacts 
+            if contact.get("confidence", 0) >= ocr_confidence_threshold
+        ]
+        
+        # Calculate statistics
+        total_pages = len(ocr_results)
+        pages_with_text = sum(1 for r in ocr_results if r.word_count > 0)
+        avg_confidence = sum(r.confidence for r in ocr_results) / total_pages if total_pages > 0 else 0
+        
+        return {
+            "success": True,
+            "total_pages": total_pages,
+            "pages_with_text": pages_with_text,
+            "avg_confidence": avg_confidence,
+            "contacts_found": len(filtered_contacts),
+            "contacts": filtered_contacts,
+            "ocr_results": [
+                {
+                    "page": r.page_num,
+                    "word_count": r.word_count,
+                    "confidence": r.confidence,
+                    "has_contacts": r.has_contacts,
+                    "preview": r.text[:200] + "..." if len(r.text) > 200 else r.text
+                }
+                for r in ocr_results
+            ]
+        }
+        
+    except Exception as e:
+        return {
+            "success": False,
+            "error": str(e),
+            "contacts": []
+        }
+
+
+def _is_pdf(uploaded_file) -> bool:
+    """Check if an uploaded file is a PDF by name or content sniffing."""
+    name = (getattr(uploaded_file, 'name', '') or '').lower()
+    if name.endswith('.pdf'):
+        return True
+    # Content sniff: PDFs start with %PDF
+    try:
+        header = uploaded_file.read(5)
+        uploaded_file.seek(0)
+        return header.startswith(b'%PDF')
+    except Exception:
+        return False
 
 
 def draw_grid_overlay(image: np.ndarray, rows: int, cols: int,
@@ -224,18 +520,33 @@ def draw_grid_overlay(image: np.ndarray, rows: int, cols: int,
 def qr_data_is_sufficient(qr_data: Optional[dict]) -> bool:
     """
     Return True if QR data has enough info to skip vision analysis.
-    Criterion: must contain at least one valid email address.
+    Criteria (any one is enough):
+      - Has a valid email address
+      - Has a full name AND a phone number
+      - Has a full name AND an organization
     """
     if not qr_data:
         return False
-    # Check 'emails' list
+    
+    # Criterion 1: Has email
     emails = qr_data.get('emails', [])
     if isinstance(emails, list) and any(e and '@' in e for e in emails):
         return True
-    # Check plain 'email' key
     email = qr_data.get('email', '')
     if isinstance(email, str) and '@' in email:
         return True
+    
+    # Criterion 2: Has full name + phone
+    has_name = bool(qr_data.get('full_name') or qr_data.get('first_name'))
+    phones = qr_data.get('phones', [])
+    if has_name and phones and len(phones) > 0:
+        return True
+    
+    # Criterion 3: Has full name + organization
+    org = qr_data.get('organization', '')
+    if has_name and org and org.strip():
+        return True
+    
     return False
 
 
@@ -525,8 +836,550 @@ def schedule_history_relaunch(run_id: str, files_data: List[Dict[str, Any]], set
     st.rerun()
 
 
+def render_contacts_panel_modern() -> None:
+    """Render the modern Contacts Repository panel based on HTML prototype."""
+    
+    # Statistics row
+    st.markdown(dedent("""
+    <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 1rem; margin-bottom: 2rem;">
+        <div class="card">
+            <div style="font-size: 1.5rem; font-weight: 700; color: var(--accent);">24</div>
+            <div style="font-size: 0.75rem; color: var(--text-tertiary); margin-top: 0.25rem;">Total Contacts</div>
+        </div>
+        <div class="card">
+            <div style="font-size: 1.5rem; font-weight: 700; color: var(--success);">22</div>
+            <div style="font-size: 0.75rem; color: var(--text-tertiary); margin-top: 0.25rem;">With Email</div>
+        </div>
+        <div class="card">
+            <div style="font-size: 1.5rem; font-weight: 700; color: var(--warning);">18</div>
+            <div style="font-size: 0.75rem; color: var(--text-tertiary); margin-top: 0.25rem;">With Phone</div>
+        </div>
+        <div class="card">
+            <div style="font-size: 1.5rem; font-weight: 700; color: var(--text-primary);">9</div>
+            <div style="font-size: 0.75rem; color: var(--text-tertiary); margin-top: 0.25rem;">Companies</div>
+        </div>
+    </div>
+    """), unsafe_allow_html=True)
+    
+    # Search and controls
+    col_search, col_filter, col_actions = st.columns([2, 1, 1])
+    
+    with col_search:
+        st.text_input("Search contacts", placeholder="Name, company, email...", label_visibility="collapsed")
+    
+    with col_filter:
+        st.selectbox("Filter", ["All", "With Email", "With Phone", "By Company"], label_visibility="collapsed")
+    
+    with col_actions:
+        st.selectbox("Actions", ["Bulk Actions", "Export All", "Delete Selected"], label_visibility="collapsed")
+    
+    # Contact list
+    st.markdown(dedent("""
+    <div class="card" style="margin-top: 1.5rem;">
+        <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 1rem;">
+            <div style="font-weight: 600;">Contacts</div>
+            <div style="display: flex; gap: 0.5rem; align-items: center;">
+                <span style="font-size: 0.75rem; color: var(--text-tertiary);">8 selected</span>
+                <div style="display: flex; gap: 0.25rem;">
+                    <button style="
+                        width: 28px; height: 28px; border-radius: 6px; border: 1px solid var(--border);
+                        background: var(--bg); cursor: pointer; display: flex; align-items: center;
+                        justify-content: center; color: var(--text-secondary);
+                    ">◻</button>
+                    <button style="
+                        width: 28px; height: 28px; border-radius: 6px; border: 1px solid var(--border);
+                        background: var(--bg); cursor: pointer; display: flex; align-items: center;
+                        justify-content: center; color: var(--text-secondary);
+                    ">☰</button>
+                </div>
+            </div>
+        </div>
+        
+        <div style="display: flex; flex-direction: column; gap: 0.5rem;">
+            <!-- Contact 1 -->
+            <div class="contact-preview" style="border-color: var(--accent); background: var(--accent-soft);">
+                <div style="display: flex; align-items: center; gap: 0.75rem;">
+                    <div style="
+                        width: 16px; height: 16px; border-radius: 4px; flex-shrink: 0; cursor: pointer;
+                        border: 1.5px solid var(--accent); background: var(--accent);
+                        display: flex; align-items: center; justify-content: center;
+                    ">
+                        <span style="color: white; font-size: 10px;">✓</span>
+                    </div>
+                    
+                    <div style="
+                        width: 34px; height: 34px; border-radius: 8px; flex-shrink: 0;
+                        background: oklch(65% 0.15 45);
+                        display: flex; align-items: center; justify-content: center;
+                        font-size: 13px; font-weight: 700; color: white;
+                    ">MR</div>
+                    
+                    <div style="flex: 1; min-width: 0;">
+                        <div style="display: flex; align-items: center; gap: 0.5rem;">
+                            <span style="font-size: 13px; font-weight: 600; color: var(--text-primary);">Marco Ribeiro</span>
+                            <span style="font-size: 11px; color: var(--text-tertiary);">Head of Engineering</span>
+                        </div>
+                        <div style="display: flex; gap: 0.75rem; margin-top: 0.25rem; flex-wrap: wrap;">
+                            <span style="font-size: 11px; color: var(--text-secondary); display: flex; align-items: center; gap: 0.25rem;">
+                                <span>🏢</span>
+                                <span>Steinweg Brokers</span>
+                            </span>
+                            <span style="font-size: 11px; color: var(--text-tertiary); display: flex; align-items: center; gap: 0.25rem;">
+                                <span>📧</span>
+                                <span>marco.ribeiro@steinweg.com</span>
+                            </span>
+                        </div>
+                    </div>
+                    
+                    <div style="display: flex; align-items: center; gap: 0.5rem; flex-shrink: 0;">
+                        <span style="font-size: 11px; color: var(--text-tertiary);">2026-04-28</span>
+                        <button style="
+                            background: none; border: none; cursor: pointer; color: var(--text-tertiary);
+                            padding: 4px; display: flex; align-items: center; border-radius: 4px;
+                        ">▼</button>
+                        <button style="
+                            background: none; border: none; cursor: pointer; color: var(--text-tertiary);
+                            padding: 4px; display: flex; align-items: center; border-radius: 4px;
+                        ">🗑️</button>
+                    </div>
+                </div>
+                
+                <!-- Expanded details -->
+                <div style="border-top: 1px solid var(--border); padding: 0.75rem 0 0; margin-top: 0.75rem; display: flex; gap: 1.5rem; flex-wrap: wrap;">
+                    <div style="display: flex; flex-direction: column; gap: 0.25rem; min-width: 200px;">
+                        <div style="font-size: 11px; color: var(--text-secondary); display: flex; align-items: center; gap: 0.5rem;">
+                            <span>📞</span>
+                            <span>+55 11 9 8765-4321</span>
+                        </div>
+                        <div style="font-size: 11px; color: var(--accent); display: flex; align-items: center; gap: 0.5rem;">
+                            <span>🌐</span>
+                            <span>steinweg.com</span>
+                        </div>
+                        <div style="font-size: 11px; color: var(--accent); display: flex; align-items: center; gap: 0.5rem;">
+                            <span>💼</span>
+                            <span>linkedin.com/in/marcoribeiro</span>
+                        </div>
+                    </div>
+                    <div style="display: flex; flex-direction: column; gap: 0.25rem; min-width: 200px;">
+                        <div style="font-size: 11px; color: var(--text-secondary); display: flex; align-items: center; gap: 0.5rem;">
+                            <span>🏢</span>
+                            <span>Av. Paulista, 1234 — São Paulo, SP</span>
+                        </div>
+                        <div style="font-size: 11px; color: var(--text-secondary); display: flex; align-items: center; gap: 0.5rem;">
+                            <span>📇</span>
+                            <span>Source: batch1.jpg</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- Contact 2 -->
+            <div class="contact-preview">
+                <div style="display: flex; align-items: center; gap: 0.75rem;">
+                    <div style="
+                        width: 16px; height: 16px; border-radius: 4px; flex-shrink: 0; cursor: pointer;
+                        border: 1.5px solid var(--border-strong); background: transparent;
+                    "></div>
+                    
+                    <div style="
+                        width: 34px; height: 34px; border-radius: 8px; flex-shrink: 0;
+                        background: oklch(65% 0.15 120);
+                        display: flex; align-items: center; justify-content: center;
+                        font-size: 13px; font-weight: 700; color: white;
+                    ">AC</div>
+                    
+                    <div style="flex: 1; min-width: 0;">
+                        <div style="display: flex; align-items: center; gap: 0.5rem;">
+                            <span style="font-size: 13px; font-weight: 600; color: var(--text-primary);">Ana Costa</span>
+                            <span style="font-size: 11px; color: var(--text-tertiary);">Director of Sales</span>
+                        </div>
+                        <div style="display: flex; gap: 0.75rem; margin-top: 0.25rem; flex-wrap: wrap;">
+                            <span style="font-size: 11px; color: var(--text-secondary); display: flex; align-items: center; gap: 0.25rem;">
+                                <span>🏢</span>
+                                <span>Nexus Capital</span>
+                            </span>
+                            <span style="font-size: 11px; color: var(--text-tertiary); display: flex; align-items: center; gap: 0.25rem;">
+                                <span>📧</span>
+                                <span>ana.costa@nexuscap.com</span>
+                            </span>
+                        </div>
+                    </div>
+                    
+                    <div style="display: flex; align-items: center; gap: 0.5rem; flex-shrink: 0;">
+                        <span style="font-size: 11px; color: var(--text-tertiary);">2026-04-28</span>
+                        <button style="
+                            background: none; border: none; cursor: pointer; color: var(--text-tertiary);
+                            padding: 4px; display: flex; align-items: center; border-radius: 4px;
+                        ">▼</button>
+                        <button style="
+                            background: none; border: none; cursor: pointer; color: var(--text-tertiary);
+                            padding: 4px; display: flex; align-items: center; border-radius: 4px;
+                        ">🗑️</button>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- Contact 3 -->
+            <div class="contact-preview">
+                <div style="display: flex; align-items: center; gap: 0.75rem;">
+                    <div style="
+                        width: 16px; height: 16px; border-radius: 4px; flex-shrink: 0; cursor: pointer;
+                        border: 1.5px solid var(--border-strong); background: transparent;
+                    "></div>
+                    
+                    <div style="
+                        width: 34px; height: 34px; border-radius: 8px; flex-shrink: 0;
+                        background: oklch(65% 0.15 240);
+                        display: flex; align-items: center; justify-content: center;
+                        font-size: 13px; font-weight: 700; color: white;
+                    ">PD</div>
+                    
+                    <div style="flex: 1; min-width: 0;">
+                        <div style="display: flex; align-items: center; gap: 0.5rem;">
+                            <span style="font-size: 13px; font-weight: 600; color: var(--text-primary);">Pierre Dupont</span>
+                            <span style="font-size: 11px; color: var(--text-tertiary);">Investment Manager</span>
+                        </div>
+                        <div style="display: flex; gap: 0.75rem; margin-top: 0.25rem; flex-wrap: wrap;">
+                            <span style="font-size: 11px; color: var(--text-secondary); display: flex; align-items: center; gap: 0.25rem;">
+                                <span>🏢</span>
+                                <span>Société Générale</span>
+                            </span>
+                            <span style="font-size: 11px; color: var(--text-tertiary); display: flex; align-items: center; gap: 0.25rem;">
+                                <span>📧</span>
+                                <span>p.dupont@socgen.fr</span>
+                            </span>
+                        </div>
+                    </div>
+                    
+                    <div style="display: flex; align-items: center; gap: 0.5rem; flex-shrink: 0;">
+                        <span style="font-size: 11px; color: var(--text-tertiary);">2026-04-29</span>
+                        <button style="
+                            background: none; border: none; cursor: pointer; color: var(--text-tertiary);
+                            padding: 4px; display: flex; align-items: center; border-radius: 4px;
+                        ">▼</button>
+                        <button style="
+                            background: none; border: none; cursor: pointer; color: var(--text-tertiary);
+                            padding: 4px; display: flex; align-items: center; border-radius: 4px;
+                        ">🗑️</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+        
+        <div class="divider" style="margin: 1rem 0;"></div>
+        
+        <div style="display: flex; justify-content: space-between; align-items: center;">
+            <div style="font-size: 0.75rem; color: var(--text-tertiary);">
+                Showing 3 of 24 contacts
+            </div>
+            <div style="display: flex; gap: 0.5rem;">
+                <button style="
+                    padding: 0.5rem 1rem; border-radius: var(--radius-sm); border: 1px solid var(--border);
+                    background: var(--surface); color: var(--text-primary); font-weight: 500;
+                    cursor: pointer; font-size: 0.75rem;
+                ">← Previous</button>
+                <button style="
+                    padding: 0.5rem 1rem; border-radius: var(--radius-sm); border: 1px solid var(--border);
+                    background: var(--surface); color: var(--text-primary); font-weight: 500;
+                    cursor: pointer; font-size: 0.75rem;
+                ">Next →</button>
+            </div>
+        </div>
+    </div>
+    """), unsafe_allow_html=True)
+
+
+def _render_history_tab() -> None:
+    """Render the History tab with processing timeline."""
+    
+    st.markdown(dedent("""
+    <div class="card" style="margin-bottom: 1.5rem;">
+        <div style="font-weight: 600; margin-bottom: 1rem;">Processing Timeline</div>
+        
+        <div style="display: flex; flex-direction: column; gap: 1rem;">
+            <!-- Today -->
+            <div>
+                <div style="font-size: 0.75rem; font-weight: 600; color: var(--text-secondary); margin-bottom: 0.5rem;">
+                    Today
+                </div>
+                <div style="display: flex; flex-direction: column; gap: 0.5rem;">
+                    <div style="display: flex; align-items: center; gap: 0.75rem; padding: 0.75rem; background: var(--bg); border-radius: var(--radius);">
+                        <div style="
+                            width: 32px; height: 32px; border-radius: 8px; flex-shrink: 0;
+                            background: var(--success-soft); border: 1px solid oklch(85% 0.06 145);
+                            display: flex; align-items: center; justify-content: center;
+                            color: var(--success);
+                        ">✓</div>
+                        <div style="flex: 1;">
+                            <div style="font-size: 0.875rem; font-weight: 500; color: var(--text-primary);">
+                                Processed 3 cards from "meeting_cards.jpg"
+                            </div>
+                            <div style="font-size: 0.75rem; color: var(--text-tertiary);">
+                                2 VCF files generated • 14:32
+                            </div>
+                        </div>
+                        <span class="badge badge-green">Completed</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+    """), unsafe_allow_html=True)
+
+
+def render_contacts_panel() -> None:
+    """Render the Contacts Repository panel with statistics, search, grouped cards, and bulk actions."""
+    st.markdown("## 🗄️ Contacts Repository")
+    
+    all_contacts = contacts_repo.get_all()
+    
+    # ── Statistics Dashboard ────────────────────────────────────────
+    if all_contacts:
+        total = len(all_contacts)
+        with_email = sum(1 for c in all_contacts if (c.get("contact_data", {}).get("email") or "").strip())
+        with_phone = sum(1 for c in all_contacts if (c.get("contact_data", {}).get("phone") or c.get("contact_data", {}).get("mobile", "")))
+        companies = len(set(
+            (c.get("contact_data", {}).get("company") or "").strip()
+            for c in all_contacts if (c.get("contact_data", {}).get("company") or "").strip()
+        ))
+        
+        stat_c1, stat_c2, stat_c3, stat_c4 = st.columns(4)
+        with stat_c1:
+            st.metric("Total Contacts", total)
+        with stat_c2:
+            st.metric("With Email", f"{with_email} ({with_email*100//total}%)")
+        with stat_c3:
+            st.metric("With Phone", with_phone)
+        with stat_c4:
+            st.metric("Companies", companies)
+        
+        st.markdown("---")
+        
+        # ── Search + Controls ────────────────────────────────────────
+        ctrl_col1, ctrl_col2, ctrl_col3 = st.columns([2.5, 1, 1])
+        with ctrl_col1:
+            search_query = st.text_input(
+                "🔍 Search contacts",
+                value=st.session_state.contacts_repo_search,
+                key="widget_contacts_search",
+                placeholder="Search by name, email, company, phone...",
+                label_visibility="collapsed"
+            )
+            st.session_state.contacts_repo_search = search_query
+        
+        with ctrl_col2:
+            group_by = st.checkbox(
+                "Group by company",
+                value=st.session_state.contacts_repo_group_by,
+                key="widget_group_by"
+            )
+            st.session_state.contacts_repo_group_by = group_by
+        
+        with ctrl_col3:
+            if st.button("🗑️ Clear All", key="clear_repo", use_container_width=True):
+                count = contacts_repo.clear_all()
+                st.toast(f"🗑️ Removed {count} contacts")
+                st.rerun()
+        
+        # ── Search results ───────────────────────────────────────────
+        if search_query.strip():
+            disp_contacts = contacts_repo.search(search_query)
+            st.caption(f"🔍 Found {len(disp_contacts)} result(s) for \"{search_query}\"")
+        else:
+            disp_contacts = all_contacts
+        
+        if not disp_contacts:
+            st.info("No contacts match your search.")
+            return
+        
+        st.markdown("---")
+        
+        # ── Contact list ─────────────────────────────────────────────
+        if group_by:
+            # Build grouped view from current filtered results
+            groups: Dict[str, list] = {}
+            for c in disp_contacts:
+                cd = c.get("contact_data", {})
+                company = (cd.get("company") or "").strip() or "(No company)"
+                groups.setdefault(company, []).append(c)
+            
+            sorted_groups = sorted(groups.keys(), key=lambda k: (k == "(No company)", k.lower()))
+            
+            # Gradient colors for company headers
+            colors = [
+                "#1f77b4", "#2c9e4e", "#d4a017", "#8e44ad", "#e67e22",
+                "#2980b9", "#27ae60", "#c0392b", "#16a085", "#2c3e50"
+            ]
+            
+            for gi, company in enumerate(sorted_groups):
+                color = colors[gi % len(colors)]
+                contacts_in_group = groups[company]
+                
+                st.markdown(
+                    f'<div style="background: linear-gradient(135deg, {color}, {color}dd); '
+                    f'padding: 8px 16px; border-radius: 8px; margin-top: 12px; margin-bottom: 4px;">'
+                    f'<span style="color: white; font-weight: 600; font-size: 1.1em;">🏢 {company}</span>'
+                    f'<span style="color: rgba(255,255,255,0.8); margin-left: 12px;">({len(contacts_in_group)} contact(s))</span>'
+                    f'</div>',
+                    unsafe_allow_html=True
+                )
+                
+                for c in contacts_in_group:
+                    _render_contact_card(c, all_contacts)
+        else:
+            # Flat list (newest first, already sorted)
+            for c in disp_contacts:
+                _render_contact_card(c, all_contacts)
+        
+        # ── Bulk Repository Exports ──────────────────────────────────
+        st.markdown("---")
+        st.markdown("### 📦 Repository Exports")
+        
+        export_col1, export_col2, export_col3 = st.columns(3)
+        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+        all_dicts = contacts_repo.get_contact_dicts()
+        
+        with export_col1:
+            combined_vcf = contacts_repo.get_all_vcf()
+            st.download_button(
+                label="📋 Download All VCF",
+                data=combined_vcf or "(empty)",
+                file_name=f"repository_all_{timestamp}.vcf",
+                mime="text/vcard",
+                help="All repository contacts as VCF",
+                use_container_width=True
+            )
+        
+        with export_col2:
+            try:
+                repo_excel = ExportProcessor().export_to_excel(all_dicts) if all_dicts else None
+            except Exception:
+                repo_excel = None
+            if repo_excel:
+                st.download_button(
+                    label="📗 Download All Excel",
+                    data=repo_excel,
+                    file_name=f"repository_all_{timestamp}.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    help="All repository contacts as Excel",
+                    use_container_width=True
+                )
+            else:
+                st.button("📗 Download All Excel", disabled=True, use_container_width=True, key="repo_excel_disabled")
+        
+        with export_col3:
+            try:
+                repo_outlook = ExportProcessor().export_to_outlook_csv(all_dicts) if all_dicts else None
+            except Exception:
+                repo_outlook = None
+            if repo_outlook:
+                st.download_button(
+                    label="📧 Download All CSV",
+                    data=repo_outlook,
+                    file_name=f"repository_all_{timestamp}.csv",
+                    mime="text/csv",
+                    help="All repository contacts as Outlook CSV",
+                    use_container_width=True
+                )
+            else:
+                st.button("📧 Download All CSV", disabled=True, use_container_width=True, key="repo_csv_disabled")
+    else:
+        st.info("📭 Repository is empty. Process business cards and save contacts to build your collection.")
+        st.caption("After processing cards, click 💾 to save individual contacts or use the bulk save button.")
+
+
+def _render_contact_card(contact_entry: dict, all_contacts: list) -> None:
+    """Render a single contact card with actions."""
+    cid = contact_entry.get("id", "")
+    cd = contact_entry.get("contact_data", {})
+    name = cd.get("fullName") or f"{cd.get('firstName', '')} {cd.get('lastName', '')}".strip() or "Unknown"
+    email = (cd.get("email") or "").strip()
+    phone = (cd.get("phone") or cd.get("mobile") or "").strip()
+    title = (cd.get("title") or "").strip()
+    company = (cd.get("company") or "").strip()
+    added = contact_entry.get("added_at", "")[:10]
+    
+    is_expanded = st.session_state.get("contacts_repo_view") == cid
+    
+    with st.container():
+        # Header row
+        hdr_col1, hdr_col2, hdr_col3 = st.columns([3, 1.5, 1])
+        with hdr_col1:
+            st.markdown(f"**👤 {name}**")
+        with hdr_col2:
+            details = []
+            if email:
+                details.append(f"✉️ {email[:30]}{'...' if len(email) > 30 else ''}")
+            if phone:
+                details.append(f"☎️ {phone[:20]}{'...' if len(phone) > 20 else ''}")
+            if details:
+                st.caption(" | ".join(details))
+        with hdr_col3:
+            act_col1, act_col2, act_col3 = st.columns([1, 1, 1])
+            with act_col1:
+                if st.button("📄" if not is_expanded else "▲", key=f"repo_view_{cid}", help="Toggle details", use_container_width=True):
+                    st.session_state.contacts_repo_view = cid if not is_expanded else None
+                    st.rerun()
+            with act_col2:
+                vcf = contact_entry.get("vcf_content", "")
+                if vcf:
+                    st.download_button(
+                        label="📥",
+                        data=vcf,
+                        file_name=f"{name.replace(' ', '_')}_{cid}.vcf",
+                        mime="text/vcard",
+                        key=f"repo_vcf_{cid}",
+                        help="Download VCF",
+                        use_container_width=True
+                    )
+                else:
+                    st.button("📥", disabled=True, key=f"repo_vcf_dis_{cid}", use_container_width=True)
+            with act_col3:
+                if st.button("🗑️", key=f"repo_del_{cid}", help="Delete contact", use_container_width=True):
+                    contacts_repo.remove_contact(cid)
+                    if st.session_state.contacts_repo_view == cid:
+                        st.session_state.contacts_repo_view = None
+                    st.toast(f"🗑️ {name[:30]} removed")
+                    st.rerun()
+        
+        # Expanded details
+        if is_expanded:
+            st.markdown("---")
+            detail_col1, detail_col2 = st.columns(2)
+            with detail_col1:
+                st.caption(f"📛 **Name:** {name}")
+                if title:
+                    st.caption(f"💼 **Title:** {title}")
+                if company:
+                    st.caption(f"🏢 **Company:** {company}")
+                if email:
+                    st.caption(f"✉️ **Email:** {email}")
+                st.caption(f"🆔 **ID:** `{cid}`")
+                st.caption(f"📅 **Added:** {added}")
+            with detail_col2:
+                if phone:
+                    st.caption(f"☎️ **Phone:** {phone}")
+                mobile = (cd.get("mobile") or "").strip()
+                if mobile and mobile != phone:
+                    st.caption(f"📱 **Mobile:** {mobile}")
+                website = (cd.get("website") or "").strip()
+                if website:
+                    st.caption(f"🌐 **Website:** {website}")
+                address = (cd.get("address") or "").strip()
+                if address:
+                    st.caption(f"📍 **Address:** {address}")
+                source = contact_entry.get("source_file", "")
+                if source:
+                    st.caption(f"🖼️ **Source:** {source}")
+        
+        st.markdown(
+            '<hr style="margin: 8px 0; border: none; border-top: 1px solid #e8e8e8;">',
+            unsafe_allow_html=True
+        )
+
+
 def render_history_panel() -> None:
-    """Render the history sidebar/section with filters and actions."""
+    """Render the history sidebar/section with improved UX, statistics, and card-based layout."""
     st.markdown("## 🗂️ Scan History")
     with st.expander("🗂️ View Saved Runs", expanded=False):
         history_runs = get_cached_history_runs()
@@ -540,6 +1393,24 @@ def render_history_panel() -> None:
                 run_datetimes.append(datetime.fromisoformat(entry.created_at))
             except Exception:
                 run_datetimes.append(datetime.now())
+
+        # ── Statistics Summary Bar ────────────────────────────────────
+        total_runs = len(history_runs)
+        total_cards_all = sum(len(entry.cards) for entry in history_runs)
+        total_emails_all = sum(sum(1 for card in entry.cards if card.contact_data.get("email")) for entry in history_runs)
+        total_images_all = sum(len(entry.original_files) for entry in history_runs)
+        
+        stat_c1, stat_c2, stat_c3, stat_c4 = st.columns(4)
+        with stat_c1:
+            st.metric("Total Runs", total_runs)
+        with stat_c2:
+            st.metric("Total Cards", total_cards_all)
+        with stat_c3:
+            st.metric("Total Emails", total_emails_all)
+        with stat_c4:
+            st.metric("Total Images", total_images_all)
+        
+        st.markdown("---")
 
         min_date = min(run_datetimes).date()
         max_date = max(run_datetimes).date()
@@ -592,89 +1463,116 @@ def render_history_panel() -> None:
             phones = sum(1 for card in entry.cards if card.contact_data.get("phone"))
             originals = len(entry.original_files)
 
-            st.markdown("---")
-            header_cols = st.columns([2.8, 1.2, 1.2, 1.2])
-            with header_cols[0]:
-                st.markdown(f"**{run_dt.strftime('%Y-%m-%d %H:%M:%S')}**")
-                st.caption(f"`{entry.run_id}` · {entry.settings.get('detection_mode', 'Automatic')} · {entry.settings.get('vision_model', 'llava:13b')}")
-            with header_cols[1]:
-                st.markdown(f"**Cards:** {total_cards}")
-                st.caption(f"{emails} emails · {phones} phones")
-            with header_cols[2]:
-                st.markdown(f"**Images:** {originals}")
-                st.caption("Stored uploads")
-            with header_cols[3]:
-                st.markdown("**Exports:**")
-                st.caption(f"{len(entry.exports)} file(s)")
+            # Card-based layout with better visual separation
+            with st.container():
+                # Header with timestamp
+                header_cols = st.columns([2, 1, 1])
+                with header_cols[0]:
+                    st.markdown(f"**📅 {run_dt.strftime('%Y-%m-%d %H:%M:%S')}**")
+                    st.caption(f"Run ID: `{entry.run_id}`")
+                with header_cols[1]:
+                    st.caption(f"Mode: {entry.settings.get('detection_mode', 'Automatic')}")
+                with header_cols[2]:
+                    st.caption(f"Model: {entry.settings.get('vision_model', 'llava:13b')}")
+                
+                st.markdown("---")
+                
+                # Metrics row
+                metric_c1, metric_c2, metric_c3, metric_c4 = st.columns(4)
+                with metric_c1:
+                    st.metric("Cards", total_cards)
+                with metric_c2:
+                    st.metric("Emails", emails)
+                with metric_c3:
+                    st.metric("Phones", phones)
+                with metric_c4:
+                    st.metric("Images", originals)
+                
+                st.markdown("---")
+                
+                # Action buttons
+                action_cols = st.columns([1, 1, 1, 1])
+                view_key = f"history_view_{entry.run_id}"
+                download_key = f"history_download_{entry.run_id}"
+                relaunch_key = f"history_relaunch_{entry.run_id}"
+                delete_key = f"history_delete_{entry.run_id}"
 
-            action_cols = st.columns([1, 1, 1, 1])
-            view_key = f"history_view_{entry.run_id}"
-            download_key = f"history_download_{entry.run_id}"
-            relaunch_key = f"history_relaunch_{entry.run_id}"
-            delete_key = f"history_delete_{entry.run_id}"
+                with action_cols[0]:
+                    if st.button("👀 View", key=view_key, use_container_width=True):
+                        if st.session_state.history_view_run == entry.run_id:
+                            st.session_state.history_view_run = None
+                        else:
+                            st.session_state.history_view_run = entry.run_id
+                        st.rerun()
 
-            with action_cols[0]:
-                if st.button("👀 View", key=view_key):
-                    if st.session_state.history_view_run == entry.run_id:
-                        st.session_state.history_view_run = None
-                    else:
-                        st.session_state.history_view_run = entry.run_id
-                    st.rerun()
+                with action_cols[1]:
+                    try:
+                        zip_bytes = history_manager.build_run_package(entry.run_id)
+                        st.download_button(
+                            label="💾 ZIP",
+                            data=zip_bytes,
+                            file_name=f"history_{entry.run_id}.zip",
+                            mime="application/zip",
+                            key=download_key,
+                            use_container_width=True,
+                        )
+                    except Exception as err:
+                        st.button("❌ ZIP", disabled=True, use_container_width=True, key=f"zip_err_{entry.run_id}")
 
-            with action_cols[1]:
-                try:
-                    zip_bytes = history_manager.build_run_package(entry.run_id)
-                    st.download_button(
-                        label="💾 ZIP",
-                        data=zip_bytes,
-                        file_name=f"history_{entry.run_id}.zip",
-                        mime="application/zip",
-                        key=download_key,
-                    )
-                except Exception as err:
-                    st.warning(f"⚠️ ZIP unavailable: {err}")
+                with action_cols[2]:
+                    if st.button("🔁 Relaunch", key=relaunch_key, use_container_width=True):
+                        run_path = history_manager.base_dir / entry.run_id
+                        files_data = []
+                        for file_info in entry.original_files:
+                            file_path = run_path / file_info.path
+                            if file_path.exists():
+                                try:
+                                    files_data.append(
+                                        {
+                                            "name": file_info.name,
+                                            "data": file_path.read_bytes(),
+                                        }
+                                    )
+                                except Exception:
+                                    continue
+                       
 
-            with action_cols[2]:
-                if st.button("🔁 Relaunch", key=relaunch_key):
-                    run_path = history_manager.base_dir / entry.run_id
-                    files_data = []
-                    for file_info in entry.original_files:
-                        file_path = run_path / file_info.path
-                        if file_path.exists():
-                            try:
-                                files_data.append(
-                                    {
-                                        "name": file_info.name,
-                                        "data": file_path.read_bytes(),
-                                    }
-                                )
-                            except Exception:
-                                continue
-                    schedule_history_relaunch(entry.run_id, files_data, entry.settings)
+                with action_cols[3]:
+                    if st.button("🗑️ Delete", key=delete_key, use_container_width=True):
+                        st.session_state.history_delete_request = entry.run_id
+                        st.rerun()
 
-            with action_cols[3]:
-                if st.button("🗑️ Delete", key=delete_key):
-                    st.session_state.history_delete_request = entry.run_id
-                    st.rerun()
-
-            if st.session_state.history_view_run == entry.run_id:
-                with st.container():
-                    st.write("**Contacts saved:**")
+                # Detail view (expandable)
+                if st.session_state.history_view_run == entry.run_id:
+                    st.markdown("<br>", unsafe_allow_html=True)
+                    st.markdown("**✉️ Contacts in this run:**")
+                    
                     if entry.cards:
-                        for card in entry.cards:
+                        contact_col1, contact_col2 = st.columns(2)
+                        for idx, card in enumerate(entry.cards):
                             contact = card.contact_data
                             name = contact.get("fullName") or f"{contact.get('firstName', '')} {contact.get('lastName', '')}".strip() or "Unknown"
-                            company = contact.get("company", "—")
-                            email = contact.get("email", "—")
-                            phone = contact.get("phone", "—")
-                            st.markdown(f"- **{name}** · {company} · ✉️ {email} · ☎️ {phone}")
+                            company = contact.get("company", "")
+                            email = contact.get("email", "")
+                            phone = contact.get("phone", "")
+                            
+                            col = contact_col1 if idx % 2 == 0 else contact_col2
+                            with col:
+                                st.caption(f"👤 **{name}**")
+                                if company:
+                                    st.caption(f"🏢 {company}")
+                                if email:
+                                    st.caption(f"✉️ {email}")
+                                if phone:
+                                    st.caption(f"☎️ {phone}")
                     else:
-                        st.caption("This run stored no contacts.")
+                        st.caption("No contacts saved in this run.")
 
                     if entry.exports:
-                        st.write("**Stored export files:**")
+                        st.markdown("<br>", unsafe_allow_html=True)
+                        st.markdown("**📦 Stored exports:**")
                         for export_file in entry.exports:
-                            st.caption(f"- {export_file.name} ({export_file.media_type})")
+                            st.caption(f"📄 {export_file.name} ({export_file.media_type})")
                     else:
                         st.caption("No export files archived yet.")
 
@@ -953,27 +1851,36 @@ def process_business_cards(uploaded_files, vision_model, vision_timeout, detecti
             with st.spinner("✨ Detecting cards with document scanner algorithm..."):
                 detected_cards = improved_detector.detect_cards(cv_image)
 
-                # Grid-layout fallback: if auto-detection found very few cards
+                # Filter out blank cards from auto-detection (e.g. entire blank PDF pages
+                # that the detector returns as a single "whole image" fallback card)
+                detected_cards = [
+                    (card_img, contour) for (card_img, contour) in detected_cards
+                    if not _is_blank_cell(card_img)
+                ]
+
+                # Grid-layout fallback: if auto-detection found no cards or very few,
                 # but the image looks like a multi-card scan (tall or wide),
                 # infer a grid from the image aspect ratio and split uniformly —
                 # the same logic used by "Manual - Grid Layout".
-                if len(detected_cards) < 4:
+                # Only trigger if 0-1 cards found (not 0-3), since 1 card is valid.
+                if len(detected_cards) < 2:
                     h_img, w_img = cv_image.shape[:2]
                     aspect = w_img / h_img if h_img > 0 else 1.0
-                    # Infer grid from aspect ratio.
-                    # Portrait (tall): 4 rows × 2 cols
-                    # Square / near-square: 4 rows × 2 cols (most common scan layout)
-                    # Landscape (wide): 2 rows × 4 cols
                     if aspect < 1.4:
                         inferred_rows, inferred_cols = 4, 2
                     else:
                         inferred_rows, inferred_cols = 2, 4
 
                     grid_cards = split_image_grid(cv_image, inferred_rows, inferred_cols)
+                    # Filter blank cells (e.g. empty PDF pages where only one cell has a card)
+                    grid_cards = [
+                        (cell_img, None) for (cell_img, _) in grid_cards
+                        if not _is_blank_cell(cell_img)
+                    ]
                     if len(grid_cards) > len(detected_cards):
                         detected_cards = grid_cards
                         st.info(
-                            f"🔲 Auto-detected {len(detected_cards)} cards using "
+                            f"🔲 Auto-detected {len(detected_cards)} card(s) using "
                             f"{inferred_rows}×{inferred_cols} grid layout "
                             f"(inferred from image aspect ratio {aspect:.2f})"
                         )
@@ -1205,13 +2112,395 @@ def main():
 
     handle_history_delete_request()
     
-    # Header
-    st.markdown('<div class="main-header">📇 Business Card Scanner</div>', unsafe_allow_html=True)
-    st.markdown("Upload business card images to extract contact information and generate VCF files for Outlook.")
+    # Modern header with sidebar navigation
+    col1, col2 = st.columns([1, 4])
+    
+    with col1:
+        # Sidebar navigation similar to HTML prototype
+        st.markdown(dedent("""
+        <div style="
+            background: var(--sidebar-bg);
+            color: white;
+            border-radius: var(--radius-lg);
+            padding: 1.5rem;
+            height: calc(100vh - 2rem);
+            position: sticky;
+            top: 1rem;
+        ">
+            <div style="margin-bottom: 2rem;">
+                <div style="font-size: 1.25rem; font-weight: 700; margin-bottom: 0.25rem;">📇</div>
+                <div style="font-size: 0.875rem; font-weight: 600;">Business Card Reader</div>
+                <div style="font-size: 0.75rem; opacity: 0.7; margin-top: 0.25rem;">v1.2.0</div>
+            </div>
+            
+            <div style="display: flex; flex-direction: column; gap: 0.5rem;">
+                <a href="#scanner" style="
+                    display: flex;
+                    align-items: center;
+                    gap: 0.75rem;
+                    padding: 0.75rem 1rem;
+                    border-radius: var(--radius);
+                    background: rgba(255, 255, 255, 0.1);
+                    color: white;
+                    text-decoration: none;
+                    font-weight: 500;
+                    transition: background 0.2s;
+                ">
+                    <span style="font-size: 1.125rem;">📷</span>
+                    <span>Scanner</span>
+                </a>
+                
+                <a href="#contacts" style="
+                    display: flex;
+                    align-items: center;
+                    gap: 0.75rem;
+                    padding: 0.75rem 1rem;
+                    border-radius: var(--radius);
+                    background: transparent;
+                    color: rgba(255, 255, 255, 0.7);
+                    text-decoration: none;
+                    font-weight: 500;
+                    transition: all 0.2s;
+                ">
+                    <span style="font-size: 1.125rem;">👥</span>
+                    <span>Contacts</span>
+                </a>
+                
+                <a href="#history" style="
+                    display: flex;
+                    align-items: center;
+                    gap: 0.75rem;
+                    padding: 0.75rem 1rem;
+                    border-radius: var(--radius);
+                    background: transparent;
+                    color: rgba(255, 255, 255, 0.7);
+                    text-decoration: none;
+                    font-weight: 500;
+                    transition: all 0.2s;
+                ">
+                    <span style="font-size: 1.125rem;">📊</span>
+                    <span>History</span>
+                </a>
+                
+                <div style="margin-top: auto; padding-top: 1.5rem; border-top: 1px solid rgba(255, 255, 255, 0.1);">
+                    <a href="#settings" style="
+                        display: flex;
+                        align-items: center;
+                        gap: 0.75rem;
+                        padding: 0.75rem 1rem;
+                        border-radius: var(--radius);
+                        background: transparent;
+                        color: rgba(255, 255, 255, 0.7);
+                        text-decoration: none;
+                        font-weight: 500;
+                        transition: all 0.2s;
+                    ">
+                        <span style="font-size: 1.125rem;">⚙️</span>
+                        <span>Settings</span>
+                    </a>
+                </div>
+            </div>
+        </div>
+        """), unsafe_allow_html=True)
+    
+    with col2:
+        # Main content area
+        if st.session_state.get("history_message"):
+            st.info(st.session_state.history_message)
+            st.session_state.history_message = None
+        
+        # Modern tabs
+        tab1, tab2, tab3 = st.tabs([
+            "📷 Scanner", 
+            "👥 Contacts Repository", 
+            "📊 History"
+        ])
+        
+        with tab1:
+            _render_scanner_tab_modern()
+        
+        with tab2:
+            render_contacts_panel_modern()
+        
+        with tab3:
+            _render_history_tab()
 
-    if st.session_state.get("history_message"):
-        st.info(st.session_state.history_message)
-        st.session_state.history_message = None
+
+def _render_scanner_tab_modern() -> None:
+    """Render the modern scanner UI based on HTML prototype."""
+    
+    # Stats row
+    st.markdown(dedent("""
+    <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 1rem; margin-bottom: 2rem;">
+        <div class="card">
+            <div style="font-size: 1.5rem; font-weight: 700; color: var(--accent);">8</div>
+            <div style="font-size: 0.75rem; color: var(--text-tertiary); margin-top: 0.25rem;">Cards Processed</div>
+        </div>
+        <div class="card">
+            <div style="font-size: 1.5rem; font-weight: 700; color: var(--success);">6</div>
+            <div style="font-size: 0.75rem; color: var(--text-tertiary); margin-top: 0.25rem;">VCF Generated</div>
+        </div>
+        <div class="card">
+            <div style="font-size: 1.5rem; font-weight: 700; color: var(--warning);">1.8s</div>
+            <div style="font-size: 0.75rem; color: var(--text-tertiary); margin-top: 0.25rem;">Avg. Processing</div>
+        </div>
+        <div class="card">
+            <div style="font-size: 1.5rem; font-weight: 700; color: var(--text-primary);">92%</div>
+            <div style="font-size: 0.75rem; color: var(--text-tertiary); margin-top: 0.25rem;">Accuracy Rate</div>
+        </div>
+    </div>
+    """), unsafe_allow_html=True)
+    
+    # Main content in two columns
+    col_left, col_right = st.columns([2, 1])
+    
+    with col_left:
+        # Upload zone
+        st.markdown(dedent("""
+        <div class="upload-zone">
+            <div style="width: 44px; height: 44px; border-radius: 12px; background: var(--bg); border: 1px solid var(--border); display: flex; align-items: center; justify-content: center;">
+                <span style="font-size: 1.5rem;">📤</span>
+            </div>
+            <div>
+                <div style="font-size: 0.875rem; font-weight: 500; color: var(--text-primary); margin-bottom: 0.25rem;">
+                    Drop card images here
+                </div>
+                <div style="font-size: 0.75rem; color: var(--text-tertiary);">
+                    PNG, JPG, PDF — single or batch scans
+                </div>
+            </div>
+        </div>
+        """), unsafe_allow_html=True)
+        
+        # File uploader
+        uploaded_files = st.file_uploader(
+            "Choose files",
+            type=["jpg", "jpeg", "png", "pdf"],
+            accept_multiple_files=True,
+            label_visibility="collapsed"
+        )
+        
+        # Configuration panel
+        st.markdown(dedent("""
+        <div class="card" style="margin-top: 1.5rem;">
+            <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 1rem;">
+                <div style="display: flex; align-items: center; gap: 0.5rem;">
+                    <span style="font-size: 1rem;">⚙️</span>
+                    <span style="font-weight: 600;">Processing Settings</span>
+                </div>
+                <span style="color: var(--text-tertiary); cursor: pointer;">▼</span>
+            </div>
+            
+            <div class="divider"></div>
+            
+            <div style="margin-top: 1rem;">
+                <div style="font-size: 0.75rem; font-weight: 500; color: var(--text-secondary); margin-bottom: 0.5rem;">
+                    Vision Model
+                </div>
+                <div style="display: flex; gap: 0.5rem; flex-wrap: wrap;">
+                    <span class="badge badge-blue">glm-ocr</span>
+                    <span class="badge badge-neutral">llama3.2-vision</span>
+                    <span class="badge badge-neutral">llava:13b</span>
+                    <span class="badge badge-neutral">claude-3</span>
+                </div>
+                <div style="margin-top: 0.5rem; font-size: 0.7rem; color: var(--success); display: flex; align-items: center; gap: 0.25rem;">
+                    <span>⚡</span>
+                    <span>0.9B params — fastest, #1 OCR benchmark</span>
+                </div>
+            </div>
+            
+            <div style="margin-top: 1.5rem;">
+                <div style="font-size: 0.75rem; font-weight: 500; color: var(--text-secondary); margin-bottom: 0.5rem;">
+                    Detection Mode
+                </div>
+                <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 0.5rem;">
+                    <div class="card" style="padding: 0.75rem; border-color: var(--accent); background: var(--accent-soft);">
+                        <div style="font-size: 0.75rem; font-weight: 600; color: var(--accent);">Automatic</div>
+                        <div style="font-size: 0.7rem; color: var(--text-tertiary);">Edge detection</div>
+                    </div>
+                    <div class="card" style="padding: 0.75rem;">
+                        <div style="font-size: 0.75rem; font-weight: 600; color: var(--text-primary);">Single Card</div>
+                        <div style="font-size: 0.7rem; color: var(--text-tertiary);">Full image</div>
+                    </div>
+                    <div class="card" style="padding: 0.75rem;">
+                        <div style="font-size: 0.75rem; font-weight: 600; color: var(--text-primary);">Grid Layout</div>
+                        <div style="font-size: 0.7rem; color: var(--text-tertiary);">Rows × cols</div>
+                    </div>
+                </div>
+            </div>
+            
+            <div style="margin-top: 1.5rem;">
+                <div style="font-size: 0.75rem; font-weight: 500; color: var(--text-secondary); margin-bottom: 0.5rem;">
+                    Timeout — <span style="color: var(--accent); font-weight: 600;">180s</span>
+                </div>
+                <input type="range" min="60" max="600" value="180" style="width: 100%; accent-color: var(--accent);" />
+            </div>
+        </div>
+        """), unsafe_allow_html=True)
+        
+        # Process buttons - using HTML buttons that trigger Streamlit buttons via JavaScript
+        st.markdown(dedent("""
+        <div style="display: flex; gap: 0.5rem; margin-top: 1rem;">
+            <div style="flex: 1;">
+                <button onclick="document.getElementById('process-btn-hidden').click()" style="
+                    width: 100%;
+                    padding: 0.75rem;
+                    border-radius: var(--radius-sm);
+                    border: none;
+                    background: var(--accent);
+                    color: white;
+                    font-weight: 600;
+                    cursor: pointer;
+                    font-family: inherit;
+                    font-size: 0.875rem;
+                    transition: background 0.2s;
+                " onmouseover="this.style.background='var(--accent-hover)'" onmouseout="this.style.background='var(--accent)'">
+                    🚀 Process Cards
+                </button>
+            </div>
+            <div style="flex: 1;">
+                <button onclick="document.getElementById('clear-btn-hidden').click()" style="
+                    width: 100%;
+                    padding: 0.75rem;
+                    border-radius: var(--radius-sm);
+                    border: 1px solid var(--border);
+                    background: var(--surface);
+                    color: var(--text-primary);
+                    font-weight: 600;
+                    cursor: pointer;
+                    font-family: inherit;
+                    font-size: 0.875rem;
+                    transition: all 0.2s;
+                " onmouseover="this.style.borderColor='var(--accent)'; this.style.background='var(--accent-soft)'" onmouseout="this.style.borderColor='var(--border)'; this.style.background='var(--surface)'">
+                    🔄 Clear All
+                </button>
+            </div>
+        </div>
+        """), unsafe_allow_html=True)
+        
+        # Hidden Streamlit buttons for functionality
+        if st.button("Process Cards", key="process-btn-hidden", type="primary", help="Process uploaded cards"):
+            st.session_state.processing_complete = True
+            st.rerun()
+
+        if st.button("Clear All", key="clear-btn-hidden", help="Clear all processed cards"):
+            st.session_state.processed_cards = []
+            st.session_state.processing_complete = False
+            st.rerun()
+    
+    with col_right:
+        # Results panel
+        st.markdown(dedent("""
+        <div class="card">
+            <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 1rem;">
+                <div style="font-weight: 600;">Results</div>
+                <span style="font-size: 0.75rem; color: var(--text-tertiary);">4 items</span>
+            </div>
+            
+            <div style="display: flex; flex-direction: column; gap: 0.75rem;">
+                <!-- Result 1 -->
+                <div class="contact-preview">
+                    <div style="display: flex; justify-content: space-between; align-items: start; margin-bottom: 0.5rem;">
+                        <div>
+                            <div style="font-weight: 600; color: var(--text-primary);">Marco Ribeiro</div>
+                            <div style="font-size: 0.75rem; color: var(--text-secondary);">Head of Engineering</div>
+                        </div>
+                        <span class="badge badge-green">GLM-OCR</span>
+                    </div>
+                    <div style="display: flex; gap: 1rem; font-size: 0.75rem;">
+                        <div style="color: var(--text-tertiary);">📧 marco.ribeiro@steinweg.com</div>
+                        <div style="color: var(--text-tertiary);">🏢 Steinweg Brokers</div>
+                    </div>
+                    <div style="display: flex; gap: 0.5rem; margin-top: 0.75rem;">
+                        <span class="badge badge-neutral">VCF Ready</span>
+                        <span style="font-size: 0.7rem; color: var(--text-tertiary);">1.3s</span>
+                    </div>
+                </div>
+                
+                <!-- Result 2 -->
+                <div class="contact-preview">
+                    <div style="display: flex; justify-content: space-between; align-items: start; margin-bottom: 0.5rem;">
+                        <div>
+                            <div style="font-weight: 600; color: var(--text-primary);">Ana Costa</div>
+                            <div style="font-size: 0.75rem; color: var(--text-secondary);">Director of Sales</div>
+                        </div>
+                        <span class="badge badge-blue">QR Code</span>
+                    </div>
+                    <div style="display: flex; gap: 1rem; font-size: 0.75rem;">
+                        <div style="color: var(--text-tertiary);">📧 ana.costa@nexuscap.com</div>
+                        <div style="color: var(--text-tertiary);">🏢 Nexus Capital</div>
+                    </div>
+                    <div style="display: flex; gap: 0.5rem; margin-top: 0.75rem;">
+                        <span class="badge badge-green">VCF Ready</span>
+                        <span style="font-size: 0.7rem; color: var(--text-tertiary);">0.1s</span>
+                    </div>
+                </div>
+                
+                <!-- Result 3 -->
+                <div class="contact-preview">
+                    <div style="display: flex; justify-content: space-between; align-items: start; margin-bottom: 0.5rem;">
+                        <div>
+                            <div style="font-weight: 600; color: var(--text-primary);">Pierre Dupont</div>
+                            <div style="font-size: 0.75rem; color: var(--text-secondary);">Investment Manager</div>
+                        </div>
+                        <span class="badge badge-green">GLM-OCR</span>
+                    </div>
+                    <div style="display: flex; gap: 1rem; font-size: 0.75rem;">
+                        <div style="color: var(--text-tertiary);">📧 p.dupont@socgen.fr</div>
+                        <div style="color: var(--text-tertiary);">🏢 Société Générale</div>
+                    </div>
+                    <div style="display: flex; gap: 0.5rem; margin-top: 0.75rem;">
+                        <span class="badge badge-neutral">VCF Ready</span>
+                        <span style="font-size: 0.7rem; color: var(--text-tertiary);">1.8s</span>
+                    </div>
+                </div>
+            </div>
+            
+            <div class="divider" style="margin: 1rem 0;"></div>
+            
+            <div style="display: flex; gap: 0.5rem;">
+                <button style="
+                    flex: 1;
+                    padding: 0.5rem;
+                    border-radius: var(--radius-sm);
+                    border: 1px solid var(--border);
+                    background: var(--surface);
+                    color: var(--text-primary);
+                    font-weight: 500;
+                    cursor: pointer;
+                    display: flex;
+                    align-items: center;
+                    justify-content: center;
+                    gap: 0.5rem;
+                ">
+                    <span>📥</span>
+                    <span>Download All</span>
+                </button>
+                <button style="
+                    flex: 1;
+                    padding: 0.5rem;
+                    border-radius: var(--radius-sm);
+                    border: 1px solid var(--border);
+                    background: var(--surface);
+                    color: var(--text-primary);
+                    font-weight: 500;
+                    cursor: pointer;
+                    display: flex;
+                    align-items: center;
+                    justify-content: center;
+                    gap: 0.5rem;
+                ">
+                    <span>📧</span>
+                    <span>Export to Outlook</span>
+                </button>
+            </div>
+        </div>
+        """), unsafe_allow_html=True)
+
+def _render_scanner_tab() -> None:
+    """Render the main scanner UI inside its tab."""
+    
+    st.markdown("Upload business card images to extract contact information and generate VCF files for Outlook.")
     
     # Sidebar configuration
     st.sidebar.title("⚙️ Configuration")
@@ -1226,30 +2515,51 @@ def main():
     _fallback_models  = ["glm-ocr", "llama3.2-vision", "llava:13b", "llava", "bakllava", "moondream"]
 
     def _fetch_ollama_vision_models():
-        """Return (model_list, loaded_model_or_None)."""
+        """Return (model_list, loaded_model_or_None). Non-blocking with short timeout."""
         loaded = None
         models = []
         try:
-            # Running models first
-            ps = requests.get("http://localhost:11434/api/ps", timeout=2)
-            if ps.status_code == 200:
-                for m in ps.json().get("models", []):
-                    n = m.get("name", "")
-                    if any(k in n.lower() for k in _vision_keywords):
-                        loaded = n
-                        models.append(n)
-            # All installed models
-            tags = requests.get("http://localhost:11434/api/tags", timeout=2)
-            if tags.status_code == 200:
-                for m in tags.json().get("models", []):
-                    n = m.get("name", "")
-                    if any(k in n.lower() for k in _vision_keywords) and n not in models:
-                        models.append(n)
+            # Running models first (1 second timeout)
+            import socket
+            # Save original timeout and set temporary 1-second timeout
+            original_timeout = socket.getdefaulttimeout()
+            socket.setdefaulttimeout(1.0)
+            try:
+                ps = requests.get("http://localhost:11434/api/ps", timeout=1)
+                if ps.status_code == 200:
+                    for m in ps.json().get("models", []):
+                        n = m.get("name", "")
+                        if any(k in n.lower() for k in _vision_keywords):
+                            loaded = n
+                            models.append(n)
+                # All installed models (1 second timeout)
+                tags = requests.get("http://localhost:11434/api/tags", timeout=1)
+                if tags.status_code == 200:
+                    for m in tags.json().get("models", []):
+                        n = m.get("name", "")
+                        if any(k in n.lower() for k in _vision_keywords) and n not in models:
+                            models.append(n)
+            finally:
+                # Restore original timeout to prevent global connection issues
+                socket.setdefaulttimeout(original_timeout)
         except Exception:
-            pass
+            pass  # Ollama not running or network issue - use fallback
         return models or _fallback_models, loaded
 
-    _available_vision_models, _loaded_model = _fetch_ollama_vision_models()
+    # Cache Ollama model list in session state to avoid repeated timeouts
+    if 'ollama_models_cache' not in st.session_state:
+        st.session_state.ollama_models_cache = None
+        st.session_state.ollama_models_timestamp = 0
+
+    # Refresh cache every 10 seconds or on first load
+    import time
+    should_refresh = time.time() - st.session_state.ollama_models_timestamp > 10
+    if st.session_state.ollama_models_cache is None or should_refresh:
+        st.session_state.ollama_models_cache = _fetch_ollama_vision_models()
+        st.session_state.ollama_models_timestamp = time.time()
+
+    _available_vision_models, _loaded_model = st.session_state.ollama_models_cache
+
     # Default index: the currently-loaded model (no swap) or first in list
     _default_idx = 0
     if _loaded_model and _loaded_model in _available_vision_models:
@@ -1373,6 +2683,129 @@ def main():
         min_card_percent = 5
         max_card_percent = 40
 
+    # ---- PDF Processing Settings ----
+    st.sidebar.markdown("---")
+    st.sidebar.markdown("### 📄 PDF Processing")
+    
+    if HAS_PDF_SUPPORT:
+        st.sidebar.success("✅ PDF support enabled")
+        
+        # Check OCR availability
+        try:
+            from utils.ocr_processor import is_ocr_available
+            ocr_available = is_ocr_available()
+        except ImportError:
+            ocr_available = False
+        
+        if ocr_available:
+            st.sidebar.success("✅ OCR support available")
+            
+            # OCR settings
+            st.sidebar.markdown("#### 🔤 OCR Settings")
+            enable_ocr = st.sidebar.checkbox(
+                "Enable OCR for scanned PDFs",
+                value=True,
+                help="Extract text from scanned documents using OCR"
+            )
+            
+            ocr_language = st.sidebar.selectbox(
+                "OCR Language",
+                options=["por+eng", "eng", "por", "eng+por", "spa+eng"],
+                index=0,
+                help="Language for OCR recognition"
+            )
+            
+            ocr_confidence_threshold = st.sidebar.slider(
+                "Minimum OCR Confidence (%)",
+                min_value=50,
+                max_value=95,
+                value=70,
+                help="Minimum confidence for OCR results"
+            )
+        else:
+            st.sidebar.warning("⚠️ OCR not available. Install: pip install pytesseract")
+            enable_ocr = False
+            ocr_language = "por+eng"
+            ocr_confidence_threshold = 70
+        
+        # PDF rendering settings
+        pdf_dpi = st.sidebar.slider(
+            "PDF Rendering DPI",
+            min_value=100,
+            max_value=400,
+            value=200,
+            help="Higher DPI = better quality but larger files"
+        )
+        
+        # Image resizing settings
+        st.sidebar.markdown("#### Image Resizing")
+        max_image_width = st.sidebar.number_input(
+            "Max Width (pixels)",
+            min_value=800,
+            max_value=3840,
+            value=1920,
+            help="Maximum width for PDF images"
+        )
+        
+        max_image_height = st.sidebar.number_input(
+            "Max Height (pixels)",
+            min_value=600,
+            max_value=2160,
+            value=1080,
+            help="Maximum height for PDF images"
+        )
+        
+        # Compression settings for scanned documents
+        jpeg_quality = st.sidebar.slider(
+            "JPEG Quality (scanned PDFs)",
+            min_value=50,
+            max_value=100,
+            value=85,
+            help="Quality for JPEG compression (scanned documents only)"
+        )
+        
+        # Memory optimization settings
+        st.sidebar.markdown("#### 🚀 Performance")
+        enable_memory_optimization = st.sidebar.checkbox(
+            "Memory-optimized processing",
+            value=True,
+            help="Process large PDFs with memory control (recommended for files > 10MB)"
+        )
+        
+        st.sidebar.info(f"Images will be resized to max {max_image_width}×{max_image_height}")
+    else:
+        st.sidebar.warning("⚠️ PDF support not available")
+        pdf_dpi = 200
+        max_image_width = 1920
+        max_image_height = 1080
+        jpeg_quality = 85
+
+    # ---- Performance Monitoring ----
+    st.sidebar.markdown("---")
+    st.sidebar.markdown("### 📊 Performance")
+    
+    if st.sidebar.button("📈 Show Performance Report", key="btn_perf_report"):
+        monitor = get_performance_monitor()
+        report = monitor.generate_report()
+        
+        with st.sidebar.expander("Performance Report", expanded=True):
+            st.text(report)
+        
+        # Option to save report
+        if st.button("💾 Save Report to File"):
+            import tempfile
+            import os
+            
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            report_file = os.path.join(tempfile.gettempdir(), f"performance_report_{timestamp}.txt")
+            monitor.save_report(report_file)
+            st.success(f"Report saved to: {report_file}")
+    
+    if st.sidebar.button("🗑️ Clear Performance Data", key="btn_clear_perf"):
+        monitor = get_performance_monitor()
+        monitor.clear()
+        st.sidebar.success("Performance data cleared")
+
     # ---- Microsoft Graph Integration ----
     st.sidebar.markdown("---")
     st.sidebar.markdown("### 📧 Outlook Integration")
@@ -1482,10 +2915,10 @@ def main():
     # Upload section
     st.markdown("## 📤 Upload Business Cards")
     uploaded_files = st.file_uploader(
-        "Choose business card image(s)",
-        type=['png', 'jpg', 'jpeg', 'bmp'],
+        "Choose business card image(s) or PDF(s)",
+        type=['png', 'jpg', 'jpeg', 'bmp', 'pdf'],
         accept_multiple_files=True,
-        help="Upload one or more images containing business cards"
+        help="Upload image files or multi-page PDFs. PDF pages are auto-converted to images."
     )
 
     if uploaded_files:
@@ -1503,7 +2936,158 @@ def main():
             uploaded_files = history_wrappers
     
     if uploaded_files:
-        st.info(f"📊 {len(uploaded_files)} file(s) uploaded")
+        # ── PDF expansion: convert PDF pages to images ──────────────────
+        expanded_files = []
+        pdf_page_count = 0
+        ocr_results_list = []
+        
+        # Start performance monitoring for PDF processing
+        monitor = get_performance_monitor()
+        pdf_timer_id = monitor.start_timer("pdf_processing_batch")
+        
+        for uf in uploaded_files:
+            if HAS_PDF_SUPPORT and _is_pdf(uf):
+                pdf_name = getattr(uf, 'name', 'unknown')
+                
+                # Check if PDF is scanned (image-only) and OCR is enabled
+                is_scanned_pdf = False
+                if enable_ocr and OCR_AVAILABLE:
+                    try:
+                        # Quick check: read first page to see if it has text
+                        doc = _fitz.open(stream=uf.read(), filetype="pdf")
+                        first_page = doc.load_page(0)
+                        text = first_page.get_text()
+                        doc.close()
+                        uf.seek(0)  # Reset file pointer
+                        
+                        # If minimal text, likely scanned
+                        is_scanned_pdf = len(text.strip()) < 100
+                    except:
+                        pass
+                
+                # Process with OCR if scanned and OCR enabled
+                if is_scanned_pdf and enable_ocr and OCR_AVAILABLE:
+                    with st.spinner(f"🔤 Processing scanned PDF '{pdf_name}' with OCR..."):
+                        ocr_result = process_pdf_with_ocr(
+                            uf,
+                            ocr_language=ocr_language,
+                            ocr_confidence_threshold=ocr_confidence_threshold
+                        )
+                        
+                        if ocr_result["success"]:
+                            ocr_results_list.append({
+                                "pdf_name": pdf_name,
+                                "result": ocr_result
+                            })
+                            
+                            # Show OCR results
+                            with st.expander(f"📄 OCR Results for '{pdf_name}'"):
+                                st.write(f"**Pages:** {ocr_result['total_pages']} total, {ocr_result['pages_with_text']} with text")
+                                st.write(f"**Average Confidence:** {ocr_result['avg_confidence']:.1f}%")
+                                st.write(f"**Contacts Found:** {ocr_result['contacts_found']}")
+                                
+                                if ocr_result["contacts_found"] > 0:
+                                    st.write("**Extracted Contacts:**")
+                                    for i, contact in enumerate(ocr_result["contacts"], 1):
+                                        with st.container():
+                                            cols = st.columns([1, 3])
+                                            with cols[0]:
+                                                st.write(f"**{i}.**")
+                                            with cols[1]:
+                                                if contact.get("name"):
+                                                    st.write(f"**Name:** {contact['name']}")
+                                                if contact.get("email"):
+                                                    st.write(f"**Email:** {contact['email']}")
+                                                if contact.get("phone"):
+                                                    st.write(f"**Phone:** {contact['phone']}")
+                                                if contact.get("company"):
+                                                    st.write(f"**Company:** {contact['company']}")
+                                                st.write("---")
+                                
+                                # Show page-by-page details
+                                st.write("**Page Details:**")
+                                for page_info in ocr_result.get("ocr_results", []):
+                                    if page_info["word_count"] > 0:
+                                        st.write(f"Page {page_info['page']}: {page_info['word_count']} words, "
+                                                f"{page_info['confidence']:.1f}% confidence")
+                                        if page_info["preview"]:
+                                            st.caption(f"Preview: {page_info['preview']}")
+                        else:
+                            st.warning(f"⚠️ OCR processing failed for '{pdf_name}': {ocr_result.get('error', 'Unknown error')}")
+                
+                # Always convert to images for visual processing (even if OCR was used)
+                try:
+                    uf.seek(0)  # Reset file pointer
+                    pages = pdf_pages_to_images(
+                        uf, 
+                        dpi=pdf_dpi,
+                        max_width=max_image_width,
+                        max_height=max_image_height,
+                        quality=jpeg_quality,
+                        memory_optimized=enable_memory_optimization
+                    )
+                    expanded_files.extend(pages)
+                    pdf_page_count += len(pages)
+                    
+                    # Show debug info if any resizing occurred
+                    if 'pdf_debug_info' in st.session_state and st.session_state.pdf_debug_info:
+                        with st.expander("📊 PDF Processing Details"):
+                            for info in st.session_state.pdf_debug_info:
+                                st.write(f"Page {info['page']}: {info['original_size']} → {info['resized_to']} ({info['reduction_percent']}% reduction)")
+                        # Clear debug info after showing
+                        st.session_state.pdf_debug_info = []
+                        
+                except Exception as err:
+                    st.warning(f"⚠️ Could not convert PDF '{pdf_name}': {err}")
+            else:
+                expanded_files.append(uf)
+
+        if pdf_page_count:
+            st.info(f"📊 {len(uploaded_files)} file(s) uploaded → {len(expanded_files)} page(s) "
+                    f"({pdf_page_count} from PDFs)")
+            uploaded_files = expanded_files
+        else:
+            st.info(f"📊 {len(uploaded_files)} file(s) uploaded")
+        
+        # Store OCR results in session state for later use
+        if ocr_results_list:
+            st.session_state.ocr_results = ocr_results_list
+        
+        # Stop performance timer and record PDF metrics
+        monitor.stop_timer(pdf_timer_id, success=True, metadata={
+            'total_files': len(uploaded_files),
+            'pdf_files': pdf_page_count > 0,
+            'pdf_pages': pdf_page_count,
+            'ocr_processed': len(ocr_results_list),
+            'memory_optimized': enable_memory_optimization if HAS_PDF_SUPPORT else False,
+            'ocr_enabled': enable_ocr if OCR_AVAILABLE else False
+        })
+        
+        # Record PDF-specific metrics if we processed any PDFs
+        if pdf_page_count > 0:
+            try:
+                from utils.performance_monitor import PDFProcessingMetrics
+                
+                # Calculate PDF metrics
+                pdf_metrics = PDFProcessingMetrics(
+                    pdf_name="batch_processing",
+                    total_pages=pdf_page_count,
+                    total_size_mb=0,  # Would need file size info
+                    processing_time=0,  # Would need timing info
+                    avg_page_time=0,
+                    memory_peak_mb=0,
+                    memory_avg_mb=0,
+                    images_resized=len(st.session_state.get('pdf_debug_info', [])),
+                    images_compressed=sum(1 for info in st.session_state.get('pdf_debug_info', []) 
+                                         if info.get('reduction_percent', 0) > 0),
+                    ocr_pages_processed=sum(len(r.get('ocr_results', [])) for r in ocr_results_list),
+                    contacts_found=sum(len(r.get('contacts', [])) for r in ocr_results_list)
+                )
+                
+                monitor.record_pdf_metrics(pdf_metrics)
+                
+            except ImportError:
+                pass  # Performance monitor not available
         
         # Show grid preview for Manual Grid Layout mode
         if detection_mode == "Manual - Grid Layout" and len(uploaded_files) > 0:
@@ -1719,7 +3303,7 @@ def main():
                 
                 with row_col6:
                     # Action buttons in compact row
-                    action_col1, action_col2, action_col3, action_col4 = st.columns([1, 1, 1, 1])
+                    action_col1, action_col2, action_col3, action_col4, action_col5 = st.columns([1, 1, 1, 1, 1])
                     
                     with action_col1:
                         # Lock/Unlock button (smaller)
@@ -1745,6 +3329,19 @@ def main():
                             st.rerun()
                     
                     with action_col3:
+                        # Save to Repository
+                        if st.button("💾", key=f"save_repo_{idx}",
+                                   help="Save to Contacts Repository",
+                                   use_container_width=True):
+                            contacts_repo.add_contact(
+                                contact_data=card['contact_data'],
+                                source_file=card.get('source_file', card.get('filename', '')),
+                                vcf_content=card.get('vcf_content', '')
+                            )
+                            st.toast(f"✅ {name[:20]} saved to repository")
+                            st.rerun()
+                    
+                    with action_col4:
                         # VCF download (smaller)
                         if include_vcf:
                             st.download_button(
@@ -1890,6 +3487,25 @@ def main():
                         width='stretch'
                     )
 
+            # Save all contacts to repository
+            st.markdown("---")
+            st.markdown("### 💾 Contacts Repository")
+            repo_col1, repo_col2 = st.columns([1, 3])
+            with repo_col1:
+                if st.button("💾 Save All to Repository", key="save_all_repo", use_container_width=True):
+                    saved = 0
+                    for card in st.session_state.processed_cards:
+                        contacts_repo.add_contact(
+                            contact_data=card['contact_data'],
+                            source_file=card.get('source_file', card.get('filename', '')),
+                            vcf_content=card.get('vcf_content', '')
+                        )
+                        saved += 1
+                    st.toast(f"✅ {saved} contacts saved to repository")
+                    st.rerun()
+            with repo_col2:
+                st.caption(f"📊 Repository currently has **{contacts_repo.count()}** contacts")
+
             # Push to Outlook button
             st.markdown("---")
             st.markdown("### 📧 Outlook Integration")
@@ -1953,12 +3569,12 @@ def main():
         5. **Download**: Get individual VCF files or download all at once
         
         ### ⚙️ Setup Requirements
-        
+
         **For best results:**
         - Install Ollama and pull the recommended model: `ollama pull glm-ocr`
         - Start Ollama: `ollama serve`
         - Ensure clear, well-lit images of business cards
-        
+
         **Without Ollama:**
         - The app will use regex-based fallback extraction
         - Results may be less accurate but still functional

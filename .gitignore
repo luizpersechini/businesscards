@@ -41,8 +41,23 @@ htmlcov/
 .idea/
 *.swp
 *.swo
+*.code-workspace
 
 # OS
 .DS_Store
 Thumbs.db
+
+# Node
+node_modules/
+.next/
+.turbo/
+
+# Claude Code worktrees (per-session checkouts, not source)
+.claude/worktrees/
+
+# Local sample inputs / personal docs (not source code)
+/Steinweg Brokers.pdf
+/YOUR_8CARD_IMAGE.png
+/page_1_sample.png
+/Proposta_Modernizacao_v2.0.docx
 

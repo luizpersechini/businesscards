@@ -53,7 +53,7 @@ echo ""
 echo "Checking for Ollama..."
 if command -v ollama &> /dev/null; then
     echo "✓ Ollama is installed"
-    
+
     # Check if llama3.2 model is available
     echo "Checking for llama3.2 model..."
     if ollama list | grep -q "llama3.2"; then

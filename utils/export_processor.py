@@ -141,8 +141,10 @@ class ExportProcessor:
                 worksheet.column_dimensions[column_letter].width = adjusted_width
             
             # Make header row bold
+            from openpyxl.styles import Font
+            bold_font = Font(bold=True)
             for cell in worksheet[1]:
-                cell.font = cell.font.copy(bold=True)
+                cell.font = bold_font
         
         return buffer.getvalue()
     

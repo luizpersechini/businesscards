@@ -79,7 +79,7 @@ You can find free sample business card images online:
 3. **Watch** the processing steps:
    - ✅ Original image displays
    - ✅ Cards are detected
-   - ✅ OCR extracts text
+   - ✅ Vision model extracts contact information
    - ✅ QR codes are checked (if any)
    - ✅ Contact information is displayed
    - ✅ Download buttons appear
@@ -111,6 +111,15 @@ This should open Contacts app and prompt to add the contact.
 - ✅ Email is correct
 - ✅ Phone number is correct
 - ✅ Company information is present
+
+### 8. Verify Scan History
+
+1. Scroll to the bottom of the page and open the **Scan History** section.
+2. Confirm the most recent run appears with the right timestamp, card count, and model settings.
+3. Click **👀 View** to review the contacts and archived export files.
+4. Use **💾 ZIP** to download the archive and confirm it contains the original uploads, `metadata.json`, and any exports.
+5. Click **🔁 Relaunch** to reprocess the stored images without re-uploading them.
+6. (Optional) Test **🗑️ Delete** to remove the entry and ensure it disappears from the list.
 
 ## Expected Results by Feature
 
@@ -202,10 +211,23 @@ This should open Contacts app and prompt to add the contact.
 - 10 cards: 50-120 seconds
 
 **Factors affecting speed:**
-- OCR is the slowest step (3-8 seconds per card)
-- LLM processing adds 2-5 seconds per card
+- Vision model call is the slowest step (3-8 seconds per card)
+- QR scanning is fast (<1 second)
 - Card detection is fast (<1 second)
-- QR reading is fast (<1 second)
+
+## Automated Tests
+
+Run the automated checks to validate the history archive:
+
+```bash
+python -m unittest tests.test_history_manager
+```
+
+The suite verifies:
+- Metadata persistence for new runs
+- Locked state updates on stored cards
+- Export registration tracking
+- ZIP package creation for archives
 
 ## Testing Scenarios
 

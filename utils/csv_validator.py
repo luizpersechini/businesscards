@@ -3,11 +3,9 @@ CSV Validator Module
 Validates CSV format for Outlook compatibility and detects potential issues.
 """
 
-import re
 import csv
-from io import StringIO, BytesIO
-from typing import Dict, List, Tuple, Optional
-import pandas as pd
+from io import StringIO
+from typing import Dict, List, Tuple
 
 
 class CSVValidator:

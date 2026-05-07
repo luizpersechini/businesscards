@@ -6,7 +6,6 @@ Creates VCF (vCard) files from contact information for import into Outlook and o
 import vobject
 from typing import Dict, List
 from datetime import datetime
-import os
 
 
 class VCFGenerator:

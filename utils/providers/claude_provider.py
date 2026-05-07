@@ -5,13 +5,12 @@ Only used when local providers (Ollama, vLLM) are unavailable.
 """
 
 import time
-import json
 import os
 import numpy as np
 from typing import Optional, Dict, List
 
 from .base import VisionProvider
-from ..models import ProviderType, ProviderStatus, ProviderConfig, ScanResult, ContactInfo
+from ..models import ProviderType, ProviderStatus, ProviderConfig, ScanResult
 
 
 class ClaudeVisionProvider(VisionProvider):
