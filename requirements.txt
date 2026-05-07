@@ -13,13 +13,13 @@
 # ============================================================================
 streamlit>=1.28.0          # Web UI framework
 opencv-python==4.8.1.78    # Image processing
-pillow==10.1.0             # Image manipulation
+pillow>=10.3,<12           # Image manipulation (>=10.3 fixes CVE-2023-50447)
 pyzbar==0.1.9              # QR/barcode detection
 
 # ============================================================================
 # DATA PROCESSING & EXPORT
 # ============================================================================
-numpy==1.24.3              # Numerical computing
+numpy>=1.26,<3             # Numerical computing
 pandas==2.0.3              # Data manipulation and CSV operations
 openpyxl==3.1.2            # Excel file generation
 vobject==0.9.7             # VCF (vCard) generation

@@ -152,6 +152,7 @@ Leitor Otimo Cartoes LLM/
 │   ├── qr_reader.py                # QR code reading (pyzbar + OpenCV)
 │   ├── vcf_generator.py            # VCF/vCard file generation
 │   ├── export_processor.py         # Excel + Outlook CSV export
+│   ├── csv_validator.py            # Outlook CSV format validation
 │   ├── history_manager.py          # Scan history archive
 │   ├── ms_graph.py                 # Optional Outlook 365 push via MS Graph
 │   ├── models.py                   # Dataclasses (ContactInfo, ScanResult, etc.)

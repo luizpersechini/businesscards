@@ -115,13 +115,24 @@ class MSGraphContactManager:
         return self._msal_app
 
     def _save_token_cache(self):
-        """Persist token cache to disk."""
+        """Persist token cache to disk with owner-only permissions."""
         app = self._get_msal_app()
         if app.token_cache.has_state_changed:
             cache_dir = os.path.dirname(self.token_cache_path)
             os.makedirs(cache_dir, exist_ok=True)
-            with open(self.token_cache_path, 'w') as f:
+            # Open with 0600 from the start so the token is never world-readable
+            fd = os.open(
+                self.token_cache_path,
+                os.O_WRONLY | os.O_CREAT | os.O_TRUNC,
+                0o600,
+            )
+            with os.fdopen(fd, 'w') as f:
                 f.write(app.token_cache.serialize())
+            # Re-apply in case the file pre-existed with looser perms
+            try:
+                os.chmod(self.token_cache_path, 0o600)
+            except OSError:
+                pass
 
     def _acquire_token_silent(self) -> Optional[str]:
         """Try to acquire token silently from cache."""
