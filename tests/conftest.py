@@ -45,7 +45,23 @@ def _is_local_url(url: str) -> bool:
 
 @pytest.fixture(autouse=True)
 def _block_localhost_network(monkeypatch):
-    """Fail fast on any localhost HTTP call so missing daemons don't hang CI."""
+    """Fail fast on any localhost HTTP call so missing daemons don't hang CI.
+
+    Two layers of defence:
+
+    1. Patch ``requests.get`` / ``requests.post`` so any code that touches a
+       localhost URL via the requests library raises ConnectionError
+       immediately (no 3-second timeout, no socket connect attempt).
+    2. Patch the local-provider availability checks
+       (``OllamaVisionProvider.check_availability`` /
+       ``VLLMVisionProvider.check_availability``) directly to return
+       ``UNAVAILABLE`` without doing ANY network I/O. This is the surer fix
+       because even if a future provider stops using the requests library
+       (e.g. switches to httpx), the test suite will still be safe.
+
+    Tests that explicitly want a positive response can still re-patch via
+    their own ``monkeypatch`` (function-scope wins over this autouse one).
+    """
     real_get = requests.get
     real_post = requests.post
 
@@ -62,6 +78,21 @@ def _block_localhost_network(monkeypatch):
 
     monkeypatch.setattr(requests, "get", _guarded("get", real_get))
     monkeypatch.setattr(requests, "post", _guarded("post", real_post))
+
+    # Belt + braces: short-circuit local-provider availability checks so they
+    # NEVER make a socket call. Importing here (lazily) so this conftest stays
+    # cheap to import for tests that don't use ProviderFactory.
+    from utils.models import ProviderStatus
+    from utils.providers.ollama_provider import OllamaVisionProvider
+    from utils.providers.vllm_provider import VLLMVisionProvider
+
+    def _unavailable(self):
+        self._last_error = "[conftest] Skipped network probe in tests"
+        return ProviderStatus.UNAVAILABLE
+
+    monkeypatch.setattr(OllamaVisionProvider, "check_availability", _unavailable)
+    monkeypatch.setattr(VLLMVisionProvider, "check_availability", _unavailable)
+
     yield
 
 
