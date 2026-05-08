@@ -14,6 +14,28 @@ from typing import Dict, Any
 # Add project root to Python path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Disable probablepeople in tests
+#
+# probablepeople depends on python-crfsuite, a C extension. On Python 3.12
+# manylinux GitHub-Actions runners, the wheel hangs in a tight C loop that
+# never yields the GIL, so pytest-timeout's signal handler can't interrupt
+# it. The hang manifests in tests/test_ocr_parser.py::test_extracts_simple_email
+# (the first test to call OllamaVisionProvider._parse_ocr_to_contact, which
+# internally tries to tag candidate lines with probablepeople).
+#
+# The OCR parser already has a graceful ImportError fallback to its
+# pure-Python heuristics — and the existing tests in test_ocr_parser.py were
+# written against those heuristics. Stubbing the modules out here makes
+# `import probablepeople` raise ModuleNotFoundError immediately so the
+# parser uses the fallback path. No test changes needed.
+#
+# Real fix would be to find a python-crfsuite version with a working cp312
+# wheel; track that work separately.
+# ─────────────────────────────────────────────────────────────────────────────
+sys.modules.setdefault("probablepeople", None)
+sys.modules.setdefault("probableparsing", None)
+
 from utils.models import ContactInfo, Address, ScanResult, ProviderType, ProviderConfig
 from utils.providers.factory import ProviderFactory
 
