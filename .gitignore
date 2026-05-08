@@ -61,3 +61,7 @@ node_modules/
 /page_1_sample.png
 /Proposta_Modernizacao_v2.0.docx
 
+
+# Local launcher app — generated locally, not source
+BusinessCardScanner.app/
+StopBusinessCardScanner.app/

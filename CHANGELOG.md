@@ -8,40 +8,35 @@ Major architectural change: **Streamlit removed; FastAPI + React is now the only
 
 ### Added
 - **`server.py`** — FastAPI backend with REST + SSE streaming for the scan pipeline.
-- **React UI** under `frontend/index.html` (and `business-card-reader/project/`).
+- **React UI** under `frontend/index.html` (and `business-card-reader/project/` design source).
 - **Stop button** on the scanner with `POST /api/scan/stop` + per-card cancellation checkpoints in `CardProcessor.process_batch`.
 - **Edit contact** action in the Contacts tab — reuses the EditModal, optimistic update, `PUT /api/contacts/{id}`.
+- **MECARD support** in the QR parser, with widened "QR-sufficient" rules so vision is skipped more often.
+- **Optional LLM post-correction pass** in the OCR parser pipeline.
+- **`phonenumbers`** (Google libphonenumber) for international phone parsing — replaces ~40 lines of brittle BR-only regex.
+- **`probablepeople`** (CRF) for name vs corporation classification — solves the "Banco do Brasil" / "Acme Corp" misclassification class.
+- **Pydantic-style JSON schema** enforced via Ollama `format` for LLM vision models (guaranteed valid JSON output).
+- **`qwen2.5vl`** added as fallback Ollama vision model.
 - **`PORT`** env var for choosing the FastAPI bind port (default 8501).
-- **CI workflow** (`.github/workflows/ci.yml`) with pytest matrix on Python 3.10/3.11/3.12, system deps for libheif/tesseract/zbar.
-- **`.env.example`** documenting `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `MS_GRAPH_CLIENT_ID`, `MS_GRAPH_TENANT_ID`.
-- **OCR parser tests** (`tests/test_ocr_parser.py`) covering CEP/phone disambiguation, name vs company swap, all-caps logos, etc.
+- **CI workflow** (`.github/workflows/ci.yml`) with pytest matrix on Python 3.10/3.11/3.12, system deps for libheif/tesseract/zbar, signal-mode timeout + 5-min OS-level kill switch.
+- **`.env.example`** documenting `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, etc.
+- **216-test suite** covering FastAPI routes (`tests/test_server.py`), QR parser (`tests/test_qr_reader.py`), VCF round-trip (`tests/test_vcf_generator.py`), OCR parser (`tests/test_ocr_parser.py`), models, history, providers, contacts repository, export processor, card processor, UI helpers.
+- **macOS launcher** (`BusinessCardScanner.app`) — double-clickable Dock icon that starts the server and opens the browser, with a paired `StopBusinessCardScanner.app` for clean shutdown.
 
 ### Changed
-- `pyproject.toml` bumped to **2.0.0**.
+- `pyproject.toml` bumped to **2.0.0**, `requires-python>=3.10`, black/ruff/mypy targets bumped to py310.
 - Provider package now uses relative imports (`from ..models import …`) instead of `sys.path.insert` hacks.
-- Outlook OAuth token cache (`utils/ms_graph.py`) written with `0o600` permissions from creation.
 - Claude Opus model ID corrected (`claude-opus-4-6` → `claude-opus-4-7`).
-- `pillow>=10.3,<12` (CVE-2023-50447) and `numpy>=1.26,<3`.
+- `pillow>=10.3,<12` (CVE-2023-50447), `opencv-python>=4.9` (NumPy 2.0 ABI), `numpy>=1.26,<3`.
 - History list endpoint stops re-reversing the already-sorted result — newest runs now appear first.
 - History persistence call signature corrected (was raising TypeError silently every scan).
 
 ### Removed
 - `app.py` (Streamlit UI), `start_app.sh`, `tests/test_app.py`.
+- `utils/ms_graph.py` (Outlook 365 sync — never wired into the React UI; recoverable from git history if needed).
 - Dead utils: `ocr_processor.py`, `csv_validator.py`, `logging_config.py`, `pdf_processor.py`, `pdf_memory_optimizer.py`, `performance_monitor.py`.
-- Stale session/roadmap docs: `IMPLEMENTATION_SUMMARY.md`, `SESSION_SUMMARY.md`, `IMPROVEMENTS.md`, `DESIGN_IMPLEMENTATION_SUMMARY.md`.
-
-# [Unreleased]
-
-### 🗂️ Scan History & Persistence
-
-#### Added
-- **History Manager** (`utils/history_manager.py`): Persists each processing run with metadata, original uploads, per-card artifacts, and export files.
-- **Scan History UI**: Filterable archive with summary view, ZIP download, reprocess, and delete actions.
-- **Automated Tests** (`tests/test_history_manager.py`): Covers metadata persistence, card updates, export tracking, and ZIP packaging.
-
-#### Changed
-- Processing pipeline now saves every run automatically and keeps history entries in sync when cards are retried or locked.
-- Streamlit interface exposes the archive with date/status filters and per-entry actions.
+- Stale docs: `IMPLEMENTATION_SUMMARY.md`, `SESSION_SUMMARY.md`, `IMPROVEMENTS.md`, `DESIGN_IMPLEMENTATION_SUMMARY.md`, `RELEASE_NOTES_v1.1.0.md`, `RELEASE_NOTES_v1.2.0.md`.
+- `assets/custom.css` (Streamlit-era stylesheet, no longer referenced).
 
 ---
 

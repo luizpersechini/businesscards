@@ -1,252 +1,229 @@
 # 📇 Business Card Scanner
 
-A local-first, AI-powered web application that extracts contact information from business card images and exports to VCF, Excel, and Outlook CSV — all running 100% on your machine.
+Local-first, AI-powered business card scanner. Drop in JPEG / PNG / PDF cards, get back clean contact records you can export to **VCF**, **Excel**, or **Outlook CSV** — without any image leaving your machine.
 
-**Version:** 1.4.0
-**Status:** Production Ready ✅
-**Last Updated:** March 2026
+[![CI](https://github.com/luizpersechini/businesscards/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/luizpersechini/businesscards/actions/workflows/ci.yml)
+[![Python](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/)
+[![License](https://img.shields.io/badge/license-MIT-green.svg)](#-license)
+[![Last commit](https://img.shields.io/github/last-commit/luizpersechini/businesscards.svg)](https://github.com/luizpersechini/businesscards/commits/main)
 
----
-
-## ✨ Features
-
-### AI Extraction (Local-First)
-- **GLM-OCR** (default, recommended) — #1 ranked OCR model on OmniDocBench v1.5 with 94.62 score, only 0.9B parameters, loads fast and runs fully local via Ollama
-- **llama3.2-vision** — general-purpose vision fallback (11B)
-- **llava, llava:13b, bakllava, moondream** — additional Ollama-compatible options
-- **vLLM** — self-hosted API fallback
-- **Claude / OpenAI** — cloud fallback (requires API key)
-- **Strategy pattern**: LOCAL → CLOUD, auto-selects best available provider
-- **QR-first logic**: skips vision entirely if QR code already contains an email — saves 20-30s per card
-
-### Card Detection
-- **Automatic** — document scanner algorithm with edge-density grid fallback
-- **Manual Grid Layout** — specify rows × cols with visual preview overlay and adjustable margins
-- **Manual Single Card** — treats the full image as one card
-
-### Export Formats
-- **VCF (vCard)** — Outlook / Contacts / iPhone compatible
-- **Excel (XLSX)** — formatted workbook with auto-sized columns
-- **Outlook CSV** — field-name variants and quoting options tuned for different Outlook versions
-- **ZIP Package** — all selected formats in one download
-
-### Other
-- **Scan History** — every run archived locally; browse, relaunch, or ZIP-download past scans
-- **Background warmup** — GLM-OCR preloads into GPU on app start so the first card is fast
-- **Dynamic model dropdown** — shows currently GPU-loaded model (🟢) to avoid costly swaps
-- **QR Code reading** — pyzbar with 5 preprocessing variants + OpenCV fallback
+> **v2.0** — FastAPI + React frontend, multi-provider LLM strategy (Ollama / vLLM / Claude / OpenAI), 216-test suite, CI on Python 3.10/3.11/3.12.
 
 ---
 
-## 🛠️ Technology Stack
+## 🎬 Screenshots
 
-| Layer | Library |
-|---|---|
-| UI | Streamlit |
-| Card detection | OpenCV |
-| QR codes | pyzbar + OpenCV |
-| Vision/OCR | Ollama (GLM-OCR, llama3.2-vision, llava…) |
-| Cloud fallback | Anthropic Claude, OpenAI |
-| VCF generation | vobject |
-| Excel export | pandas + openpyxl |
-| JPEG encoding | cv2.imencode (avoids PIL JPEG bugs) |
+| Scanner | Results | Contacts |
+|---|---|---|
+| ![Scanner](business-card-reader/project/screenshots/initial.png) | ![Results](business-card-reader/project/screenshots/results-state.png) | ![Wide](business-card-reader/project/screenshots/results-wide.png) |
 
 ---
 
-## 📋 Prerequisites
+## ✨ Highlights
 
-- Python 3.9+
-- [Ollama](https://ollama.com) (recommended, free)
-
-### System dependency (QR reading)
-
-```bash
-# macOS
-brew install zbar
-
-# Ubuntu / Debian
-sudo apt-get install libzbar0
-```
+- 🧠 **State-of-the-art OCR** — defaults to **GLM-OCR** (#1 on OmniDocBench v1.5 with a 94.62 score, only 0.9 B params, runs fully local via Ollama). Optional fallback to **Qwen2.5-VL**, **llama3.2-vision**, **llava**, **Claude**, or **OpenAI**.
+- 📷 **Smart card detection** — automatic OpenCV pipeline with grid-layout fallback for contact-sheet scans, plus manual single-card and N×M-grid modes.
+- 🧾 **QR-first short-circuit** — if a card's QR encodes a vCard / MECARD with enough data, vision is skipped entirely (saves ~20-30 s per card).
+- 📤 **Multi-format export** — VCF (Outlook / iPhone Contacts), Excel, Outlook CSV, ZIP bundle of everything.
+- 🛑 **Stop button** — cancel an in-flight scan from the UI; in-flight card finishes, no further work runs.
+- 📜 **Scan history** — every run is archived locally with original images, parsed contacts, and exports. Browse, ZIP-download, or relaunch with new settings.
+- 🏷️ **Smart name & phone parsing** — `phonenumbers` (Google libphonenumber) for international phone validation, `probablepeople` (CRF) for distinguishing "Banco do Brasil" (company) from "João da Silva" (person).
+- 🔐 **100% local** — no external API calls unless you explicitly configure a cloud fallback.
 
 ---
 
 ## 🚀 Quick Start
 
-### 1. Install Python dependencies
+### 1. Install system deps
+
+```bash
+# macOS
+brew install zbar libheif tesseract
+
+# Ubuntu / Debian
+sudo apt-get install libzbar0 libheif1 tesseract-ocr
+```
+
+### 2. Install Ollama (recommended) and pull the OCR model
+
+```bash
+curl -fsSL https://ollama.com/install.sh | sh   # macOS / Linux
+ollama pull glm-ocr
+```
+
+> **Why GLM-OCR?** 0.9 B parameters, loads in seconds, outperforms models 260× its size on document benchmarks. Ideal for business cards.
+
+### 3. Install Python deps and run
 
 ```bash
 pip install -r requirements.txt
-```
 
-### 2. Install and start Ollama
-
-```bash
-# Install (macOS / Linux)
-curl -fsSL https://ollama.com/install.sh | sh
-
-# Pull the recommended model
-ollama pull glm-ocr
-
-# Start the server
-ollama serve
-```
-
-> **Why GLM-OCR?** Only 0.9B parameters, loads in seconds, and outperforms models 260× its size on document OCR benchmarks. Ideal for business cards.
-
-### 3. Run the app
-
-```bash
-# macOS only — needed for pyzbar to find zbar
+# macOS only — let pyzbar find zbar
 export DYLD_LIBRARY_PATH=/opt/homebrew/lib:$DYLD_LIBRARY_PATH
 
 python3 server.py
 ```
 
-Open [http://localhost:8501](http://localhost:8501) in your browser. The FastAPI
-server serves the React frontend at `/` and exposes REST/SSE endpoints for the UI.
+Open **<http://localhost:8501>**. The FastAPI backend serves the React UI at `/` and exposes REST + SSE endpoints for the scan pipeline.
+
+> 💡 On macOS, double-click the included `BusinessCardScanner.app` (built locally — see [QUICKSTART.md](QUICKSTART.md)) to start the server with one click and auto-open the browser.
+
+---
+
+## 🧩 Architecture
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│  React UI (frontend/index.html)                                 │
+│  ─ Upload, scan, edit, export, history, contacts                │
+└──────────┬──────────────────────────────────────────────────────┘
+           │ REST + SSE
+┌──────────▼──────────────────────────────────────────────────────┐
+│  FastAPI server.py                                              │
+│  ─ /api/scan          (multipart upload → SSE stream)           │
+│  ─ /api/scan/stop     (cooperative cancel)                      │
+│  ─ /api/contacts      (CRUD + export VCF / XLSX / CSV)          │
+│  ─ /api/history       (list / ZIP / delete past runs)           │
+└──────────┬──────────────────────────────────────────────────────┘
+           │
+┌──────────▼──────────────────────────────────────────────────────┐
+│  utils/                                                         │
+│  ├─ card_processor       Per-card orchestration                 │
+│  ├─ improved_card_detector   OpenCV detection + grid fallback   │
+│  ├─ qr_reader            pyzbar + OpenCV (with MECARD support)  │
+│  ├─ providers/           Strategy pattern, LOCAL-FIRST          │
+│  │  ├─ ollama_provider   GLM-OCR / Qwen2.5-VL / llama3.2-vision │
+│  │  ├─ vllm_provider     vLLM OpenAI-compatible API             │
+│  │  ├─ claude_provider   Anthropic Claude vision                │
+│  │  └─ openai_provider   OpenAI GPT-4o vision                   │
+│  ├─ vcf_generator        vobject (round-trip tested)            │
+│  ├─ export_processor     pandas + openpyxl                      │
+│  ├─ history_manager      JSON metadata + per-run artifacts      │
+│  └─ contacts_repository  JSON-backed contact store              │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+LOCAL-FIRST provider chain: every scan tries Ollama → vLLM → Claude → OpenAI in priority order, with the first available provider winning. Local providers stay loaded (`keep_alive: -1`) between cards so subsequent scans cost only an inference, not a model reload.
+
+---
+
+## 🛠️ Tech stack
+
+| Layer | Library |
+|---|---|
+| Web UI | React (single-file shell) |
+| API | FastAPI + uvicorn (REST + SSE) |
+| Computer vision | OpenCV, pyzbar, pillow-heif |
+| OCR / vision | Ollama (glm-ocr, qwen2.5vl, llama3.2-vision, llava…) |
+| Cloud fallback | Anthropic Claude, OpenAI |
+| Phone parsing | `phonenumbers` (Google libphonenumber) |
+| Name parsing | `probablepeople` (CRF) |
+| VCF generation | `vobject` |
+| Excel export | `pandas` + `openpyxl` |
+| PDF rendering | `pymupdf` |
+| Tests | `pytest`, `pytest-cov`, `pytest-timeout`, `httpx` (TestClient) |
+
+---
+
+## 🤖 Recommended models
+
+| Model | Size | Best for |
+|---|---|---|
+| **glm-ocr** ⭐ | 0.9 B | Default. Fastest, most accurate OCR for business cards. |
+| qwen2.5vl | 7 B | Strong general VLM fallback (96.4 % DocVQA, 88.8 % OCRBench). |
+| llama3.2-vision | 11 B | General vision, used historically. |
+| llava:13b | 13 B | High-accuracy fallback when GPU memory allows. |
+
+`ollama pull <model>` installs any of them; the model dropdown in the UI auto-detects what you have and pre-selects whatever's currently loaded into GPU to avoid expensive swaps.
 
 ---
 
 ## 🎮 Usage
 
-1. **Upload** one or more business card images (PNG / JPG / JPEG / BMP)
-2. **Configure** detection mode and vision model in the settings panel (defaults are usually fine)
-3. **Click "Process Business Cards"**
-4. **Review** extracted contacts — edit any fields inline
-5. **Download** VCF, Excel, Outlook CSV, or a ZIP of everything
+1. **Upload** business card images or PDF (drag-and-drop or file picker).
+2. **Configure** detection mode and vision model in the settings panel — defaults are usually fine.
+3. **Process Cards** — watch live SSE progress per page / per card. Click **Stop scan** to cancel.
+4. **Review** extracted contacts inline. **Edit** any field by clicking the pencil icon.
+5. **Download** VCF / Excel / Outlook CSV individually or as a ZIP bundle.
 
-### Scan History
-
-Every run is automatically saved under `temp/history/`. Use the **Scan History** panel at the bottom of the app to:
-- Browse past runs with date filters
-- **👀 View** saved contacts and export files
-- **💾 ZIP** all uploads + exports for a run
-- **🔁 Relaunch** to reprocess stored images with new settings
-- **🗑️ Delete** runs you no longer need
-
----
-
-## 🤖 Recommended Models
-
-| Model | Size | Best for |
-|---|---|---|
-| **glm-ocr** ⭐ | 0.9B | Business cards — fastest, most accurate OCR |
-| llama3.2-vision | 11B | General-purpose vision tasks |
-| llava:13b | 13B | High-accuracy fallback if glm-ocr unavailable |
-
-Pull any model with `ollama pull <model-name>`. The app automatically detects what's installed and pre-selects the currently GPU-loaded model to avoid reload delays.
-
----
-
-## 📁 Project Structure
-
-```
-Leitor Otimo Cartoes LLM/
-├── server.py                       # FastAPI server — serves frontend + REST/SSE
-├── frontend/                       # Static React UI shell
-├── business-card-reader/project/   # React component sources
-├── pyproject.toml                  # Python project config
-├── requirements.txt                # Python dependencies
-├── setup.sh                        # Initial setup script
-├── utils/
-│   ├── card_processor.py           # Per-card pipeline (detect → QR → vision → VCF)
-│   ├── improved_card_detector.py   # OpenCV card detection + grid fallback
-│   ├── ui_components.py            # Image / grid helpers shared by server.py
-│   ├── contacts_repository.py      # JSON-backed repository for saved contacts
-│   ├── qr_reader.py                # QR code reading (pyzbar + OpenCV)
-│   ├── vcf_generator.py            # VCF/vCard file generation
-│   ├── export_processor.py         # Excel + Outlook CSV export
-│   ├── history_manager.py          # Scan history archive
-│   ├── ms_graph.py                 # (Optional, currently unused) Outlook 365 push via MS Graph
-│   ├── models.py                   # Dataclasses (ContactInfo, ScanResult, etc.)
-│   └── providers/
-│       ├── factory.py              # ProviderFactory — LOCAL-FIRST strategy
-│       ├── base.py                 # VisionProvider base class + JPEG utilities
-│       ├── ollama_provider.py      # Ollama (glm-ocr, llama3.2-vision, llava…)
-│       ├── vllm_provider.py        # vLLM self-hosted API
-│       ├── claude_provider.py      # Anthropic Claude API
-│       └── openai_provider.py      # OpenAI API
-└── temp/
-    └── history/                    # Auto-saved scan runs
-```
+Every run is auto-archived under `temp/history/` — see the History tab to browse, relaunch with new settings, or delete.
 
 ---
 
 ## 🔧 Troubleshooting
 
-### Ollama not detected
+<details>
+<summary><b>Ollama not detected</b></summary>
+
 ```bash
 ollama serve                            # start the server
 curl http://localhost:11434/api/tags    # verify it responds
 ollama list                             # check installed models
 ```
+</details>
 
-### Only 2 cards detected in a grid scan
-Switch detection mode to **Manual - Grid Layout** and enter the correct row/col count. The automatic mode also attempts aspect-ratio-based grid inference as a fallback.
+<details>
+<summary><b>QR codes not reading on macOS</b></summary>
 
-### QR codes not reading on macOS
-Set `DYLD_LIBRARY_PATH` so `pyzbar` can find the zbar dylib:
+`pyzbar` needs the zbar dylib path. Either use the bundled `BusinessCardScanner.app` (sets it for you), or:
+
 ```bash
 export DYLD_LIBRARY_PATH=/opt/homebrew/lib:$DYLD_LIBRARY_PATH
 python3 server.py
 ```
+</details>
 
-### Vision timeout
-- Increase the **Vision Timeout** slider in the settings panel (up to 600s)
-- GLM-OCR is much faster than larger models — prefer it on slower hardware
-- Check GPU usage: `ollama ps` — if model isn't on GPU, performance will be slow
+<details>
+<summary><b>Only some cards detected in a grid scan</b></summary>
+
+Switch the detection mode to **Manual — Grid Layout** in the settings panel and enter the correct rows × cols. The automatic mode falls back to a 4×2 / 2×4 grid based on aspect ratio when it can't detect cards individually, which doesn't always match real layouts.
+</details>
+
+<details>
+<summary><b>Vision timeout / slow first card</b></summary>
+
+- Bump the **Vision Timeout** slider (up to 600 s) for the cold-start case.
+- Prefer **GLM-OCR** on slower hardware — it's an order of magnitude faster than 11 B+ vision models.
+- `ollama ps` — confirm the model is on GPU. If it shows `100% CPU`, you're missing CUDA / Metal acceleration.
+</details>
+
+---
+
+## 🧪 Tests
+
+```bash
+pytest tests/                           # 216 tests, ~5 s
+pytest tests/ --cov=utils               # with coverage report (htmlcov/)
+```
+
+Coverage targets: `server.py` 100 %, `utils/qr_reader.py` 51 %, `utils/vcf_generator.py` 62 %, OCR parser 100 %, providers ~30 % (heavy network paths intentionally not covered in unit tests).
 
 ---
 
 ## 📤 Importing to Outlook
 
-### VCF
-File → Open & Export → Import/Export → Import a vCard file (.vcf)
+**VCF**: File → Open & Export → Import/Export → *Import a vCard file (.vcf)*.
 
-### Outlook CSV
-1. File → Open & Export → Import/Export → Import from another program
-2. Choose **Comma Separated Values (Windows)**
-3. If fields don't auto-map, use **Map Custom Fields** to align columns
-
-**Troubleshooting CSV import**: try enabling **Simplified Format** and adjusting field name variants (E-mail Address / Email Address / Email) in the ⚙️ Outlook CSV Options expander.
+**Outlook CSV**: File → Open & Export → Import/Export → *Import from another program* → **Comma Separated Values (Windows)**. If fields don't auto-map, use **Map Custom Fields**. Try the **Simplified Format** toggle in the export options if your Outlook version chokes on certain field-name variants.
 
 ---
 
 ## 🔐 Privacy
 
-- **100% local** — images and contact data never leave your machine
-- No external API calls unless you explicitly configure a cloud provider (Claude/OpenAI)
-- Scan history stored in `temp/history/` — delete anytime
+- **100 % local by default.** Images and contact data never leave your machine.
+- No external API calls unless you explicitly set `ANTHROPIC_API_KEY` / `OPENAI_API_KEY`.
+- Scan history is stored in `temp/history/` — delete anytime; it's gitignored.
 
 ---
 
-## 📊 Changelog
+## 📜 Changelog
 
-### v1.4.0 (March 2026)
-- **GLM-OCR** added as default recommended model (#1 on OmniDocBench v1.5, 0.9B params)
-- Background model preload at startup (GLM-OCR loads into GPU before first card)
-- Replaced all deprecated `use_container_width` with `width='stretch'`
-- Removed legacy `VisionProcessor` (fully replaced by provider strategy pattern)
-- Sidebar system status now driven by `ProviderFactory`
+See [`CHANGELOG.md`](CHANGELOG.md) for the full history. Headline of v2.0: Streamlit removed, FastAPI/React frontend, multi-provider strategy, full test suite + CI.
 
-### v1.3.0 (2025)
-- Dynamic model dropdown — shows GPU-loaded model to prevent swap timeouts
-- `cv2.imencode` JPEG encoding (fixes PIL `missing 0xff00` errors)
-- Grid card detection via edge-density projection (8-card scans now detected correctly)
-- QR-first logic: skip vision when QR code contains email
-- Warmup with `st.status` step display before batch processing
-- `keep_alive: -1` on Ollama to keep model in RAM between cards
+## 📄 License
 
-### v1.2.0 (2025)
-- Scan History archive with relaunch, ZIP download, and filters
-- LOCAL-FIRST provider strategy (Ollama → vLLM → Claude → OpenAI)
-- `ollama_test.py` standalone diagnostic script
-
-### v1.1.0 (2025)
-- Vision mode with configurable timeout
-- Dual QR code detection (pyzbar + OpenCV fallback)
-- Multiple export formats (VCF, Excel, Outlook CSV, ZIP)
+MIT — see [`pyproject.toml`](pyproject.toml).
 
 ---
 
-**Happy Scanning! 📇✨**
+**Happy scanning! 📇✨**

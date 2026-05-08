@@ -8,7 +8,7 @@ Python · FastAPI + uvicorn · React (frontend/) · OpenCV · Pillow · multi-LL
 python3 server.py       # FastAPI server on :8501 — serves React UI + REST/SSE
 bash setup.sh           # first-time setup (venv + deps)
 ```
-On macOS, prefix with `DYLD_LIBRARY_PATH=/opt/homebrew/lib:$DYLD_LIBRARY_PATH` so pyzbar can find zbar.
+On macOS, prefix with `DYLD_LIBRARY_PATH=/opt/homebrew/lib:$DYLD_LIBRARY_PATH` so pyzbar can find zbar — or just double-click `BusinessCardScanner.app` (sets it for you, opens browser).
 
 ## Test
 ```
