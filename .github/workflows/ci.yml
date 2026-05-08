@@ -41,7 +41,12 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
           # Ensure test runner tools are present even if requirements blip
-          pip install pytest pytest-cov
+          pip install pytest pytest-cov pytest-timeout
 
       - name: Run tests
-        run: pytest tests/
+        # Belt + braces:
+        #  • pytest-timeout=30s/test (signal method, reliable on Linux)
+        #  • OS-level timeout caps the whole pytest process at 5 min
+        #    so a frozen process can never wedge the workflow forever.
+        timeout-minutes: 7
+        run: timeout --kill-after=10s 5m pytest tests/

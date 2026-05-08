@@ -16,7 +16,7 @@ testpaths = ["tests"]
 python_files = ["test_*.py", "*_test.py"]
 python_classes = ["Test*"]
 python_functions = ["test_*"]
-addopts = "-v --tb=short --strict-markers --cov=utils --cov-report=html --cov-report=term-missing"
+addopts = "-v --tb=short --strict-markers --cov=utils --cov-report=html --cov-report=term-missing --timeout=30 --timeout-method=signal"
 markers = [
     "unit: Unit tests (fast, no external dependencies)",
     "integration: Integration tests (may require external services)",
