@@ -4,6 +4,7 @@ Shared test fixtures and configuration for Business Card Scanner tests.
 
 import sys
 import pytest
+import requests
 import numpy as np
 import cv2
 from pathlib import Path
@@ -15,6 +16,53 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from utils.models import ContactInfo, Address, ScanResult, ProviderType, ProviderConfig
 from utils.providers.factory import ProviderFactory
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Block stray network calls to localhost
+#
+# Several tests (TestProviderFactory.test_statuses_return_all_providers, etc.)
+# instantiate ProviderFactory and call get_all_statuses(), which triggers
+# requests.get('http://localhost:11434/api/tags') and the vLLM equivalent.
+# In CI those services don't exist; the calls *should* error out at connect
+# time but on some sandboxed runners they hang past their 3s timeout and
+# block the whole pytest run.
+#
+# This autouse session-scoped fixture monkeypatches requests.get / .post so
+# that any call to a localhost URL raises ConnectionError immediately.
+# Tests that explicitly want to mock a successful response can still do so
+# by re-patching requests in their own monkeypatch — pytest's monkeypatch
+# scope wins over this autouse one.
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def _is_local_url(url: str) -> bool:
+    if not isinstance(url, str):
+        return False
+    u = url.lower()
+    return ("://localhost" in u) or ("://127.0.0.1" in u) or ("://0.0.0.0" in u)
+
+
+@pytest.fixture(autouse=True)
+def _block_localhost_network(monkeypatch):
+    """Fail fast on any localhost HTTP call so missing daemons don't hang CI."""
+    real_get = requests.get
+    real_post = requests.post
+
+    def _guarded(method_name, real_method):
+        def _wrapper(url, *args, **kwargs):
+            if _is_local_url(url):
+                raise requests.exceptions.ConnectionError(
+                    f"[conftest] Blocked {method_name.upper()} {url} — localhost "
+                    "services are not started in tests. Mock requests in your "
+                    "test if you need a fake response."
+                )
+            return real_method(url, *args, **kwargs)
+        return _wrapper
+
+    monkeypatch.setattr(requests, "get", _guarded("get", real_get))
+    monkeypatch.setattr(requests, "post", _guarded("post", real_post))
+    yield
 
 
 @pytest.fixture
