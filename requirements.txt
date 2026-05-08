@@ -81,6 +81,7 @@ psutil>=5.9.0              # System and process utilities
 # ============================================================================
 pytest>=7.4.0              # Testing framework
 pytest-cov>=4.1.0          # Coverage reporting
+pytest-timeout>=2.2.0      # Per-test timeout — fails hung tests instead of stalling CI
 responses>=0.24.0          # Mock HTTP responses for testing
 black>=23.0.0              # Code formatter
 mypy>=1.4.0                # Type checking
