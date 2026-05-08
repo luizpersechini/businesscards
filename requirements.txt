@@ -21,6 +21,7 @@ python-multipart>=0.0.9   # multipart/form-data upload support
 opencv-python>=4.9.0,<5    # Image processing (>=4.9 fixes NumPy 2.0 ABI break)
 pillow>=10.3,<12           # Image manipulation (>=10.3 fixes CVE-2023-50447, Python 3.13 compatible)
 pillow-heif>=0.13.0        # HEIC/HEIF support (iPhone photos)
+imutils>=0.5.4             # Convenience wrappers (resize, grab_contours) used by improved_card_detector
 pyzbar==0.1.9              # QR/barcode detection
 phonenumbers>=8.13         # Google libphonenumber port — phone parsing/validation
 probablepeople>=0.5        # CRF-based Person/Corporation parser for OCR text
