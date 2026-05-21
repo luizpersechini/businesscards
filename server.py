@@ -62,8 +62,76 @@ os.makedirs(THUMBNAIL_DIR, exist_ok=True)
 
 
 # ═══════════════════════════════════════════════════════════
+# PATH-TRAVERSAL GUARDS (security audit 2026-05-20)
+# ═══════════════════════════════════════════════════════════
+import re as _re  # noqa: E402
+
+# run_id is generated as "%Y%m%d_%H%M%S" + "_" + 6 hex chars (history_manager).
+_RUN_ID_RE = _re.compile(r"^\d{8}_\d{6}_[0-9a-f]{6}$")
+# card_id is "<run_id>_<idx>" or "card_<idx>_<ts>" — alnum + underscore only.
+_CARD_ID_RE = _re.compile(r"^[A-Za-z0-9_]{1,128}$")
+
+
+def _safe_run_id(run_id: str) -> str:
+    """Reject any run_id that isn't the exact generated format. Blocks
+    path traversal (.., /, %2e) on /api/history/{run_id} routes."""
+    if not _RUN_ID_RE.match(run_id or ""):
+        raise HTTPException(status_code=404, detail="Run not found")
+    return run_id
+
+
+def _safe_thumb_path(card_id: str) -> str:
+    """Validate card_id charset AND confirm the resolved path stays inside
+    THUMBNAIL_DIR (defense in depth). Blocks /api/thumbnails/{card_id}
+    traversal like ..%2F..%2Fcontacts_repository."""
+    if not _CARD_ID_RE.match(card_id or ""):
+        raise HTTPException(status_code=404, detail="Thumbnail not found")
+    base = os.path.realpath(THUMBNAIL_DIR)
+    candidate = os.path.realpath(os.path.join(base, f"{card_id}.jpg"))
+    if candidate != base and not candidate.startswith(base + os.sep):
+        raise HTTPException(status_code=404, detail="Thumbnail not found")
+    return candidate
+
+
+# ═══════════════════════════════════════════════════════════
+# UPLOAD VALIDATION (security audit 2026-05-20)
+# Cap size + allow-list extensions + magic-byte sniff before any bytes
+# reach cv2.imdecode / fitz.open (PyMuPDF), both of which have a history
+# of memory-corruption CVEs on crafted input.
+# ═══════════════════════════════════════════════════════════
+MAX_UPLOAD_BYTES = int(os.getenv("MAX_UPLOAD_BYTES", str(25 * 1024 * 1024)))  # 25 MB
+_ALLOWED_UPLOAD_EXTS = {".jpg", ".jpeg", ".png", ".heic", ".heif", ".webp", ".pdf"}
+# (ext) -> tuple of acceptable leading magic byte sequences
+_MAGIC = {
+    b"\xff\xd8\xff": "jpeg",
+    b"\x89PNG\r\n\x1a\n": "png",
+    b"RIFF": "webp",  # RIFF....WEBP
+    b"%PDF": "pdf",
+    b"\x00\x00\x00\x18ftyp": "heic",
+    b"\x00\x00\x00\x1cftyp": "heic",
+}
+
+
+def _validate_upload(filename: str, raw: bytes) -> Optional[str]:
+    """Return None if the upload is acceptable, else an error message string."""
+    ext = os.path.splitext((filename or "").lower())[1]
+    if ext not in _ALLOWED_UPLOAD_EXTS:
+        return f"Unsupported file type {ext!r} (allowed: {sorted(_ALLOWED_UPLOAD_EXTS)})"
+    if len(raw) == 0:
+        return "Empty file"
+    if len(raw) > MAX_UPLOAD_BYTES:
+        return f"File too large ({len(raw)} bytes > {MAX_UPLOAD_BYTES} limit)"
+    # Magic-byte sniff (best-effort; HEIC/WEBP have ftyp/RIFF containers)
+    head = raw[:16]
+    if not any(head.startswith(sig) or sig in head[:16] for sig in _MAGIC):
+        return "File content does not match a supported image/PDF format"
+    return None
+
+
+# ═══════════════════════════════════════════════════════════
 # STATUS
 # ═══════════════════════════════════════════════════════════
+
 
 @app.get("/api/status")
 async def get_status():
@@ -75,7 +143,11 @@ async def get_status():
             models = [m.get("name", "") for m in tags]
             glm_ready = any("glm" in m.lower() for m in models)
             first_model = models[0].split(":")[0] if models else "unknown"
-            return {"ollama": "ready", "model": "glm-ocr" if glm_ready else first_model, "models": models}
+            return {
+                "ollama": "ready",
+                "model": "glm-ocr" if glm_ready else first_model,
+                "models": models,
+            }
     except Exception:
         pass
     return {"ollama": "offline", "model": "none", "models": []}
@@ -84,6 +156,7 @@ async def get_status():
 # ═══════════════════════════════════════════════════════════
 # SCAN  (SSE streaming)
 # ═══════════════════════════════════════════════════════════
+
 
 def _sse(data: dict) -> str:
     return f"data: {json.dumps(data)}\n\n"
@@ -94,10 +167,13 @@ def _load_image(raw: bytes, filename: str):
     if filename.lower().endswith(".pdf"):
         try:
             import fitz
+
             doc = fitz.open(stream=raw, filetype="pdf")
             page = doc[0]
             pix = page.get_pixmap(dpi=200)
-            img_array = np.frombuffer(pix.samples, dtype=np.uint8).reshape(pix.height, pix.width, pix.n)
+            img_array = np.frombuffer(pix.samples, dtype=np.uint8).reshape(
+                pix.height, pix.width, pix.n
+            )
             if pix.n == 4:
                 img_array = cv2.cvtColor(img_array, cv2.COLOR_RGBA2RGB)
             rgb = img_array
@@ -114,76 +190,82 @@ def _load_image(raw: bytes, filename: str):
         return bgr, rgb
 
 
-def _pdf_to_images(raw: bytes, filename: str, dpi: int = 200) -> List[Tuple[np.ndarray, np.ndarray]]:
+def _pdf_to_images(
+    raw: bytes, filename: str, dpi: int = 200
+) -> List[Tuple[np.ndarray, np.ndarray]]:
     """
     Convert all pages of a PDF to (bgr, rgb) numpy arrays.
-    
+
     Args:
         raw: PDF file bytes
         filename: Original filename
         dpi: DPI for rendering
-        
+
     Returns:
         List of (bgr, rgb) tuples for each page
     """
     if not filename.lower().endswith(".pdf"):
         raise ValueError(f"Not a PDF file: {filename}")
-    
+
     try:
         import fitz
     except ImportError:
         raise ValueError("PDF support requires PyMuPDF (pip install pymupdf)")
-    
+
     doc = fitz.open(stream=raw, filetype="pdf")
     pages = []
-    
+
     for page_num in range(len(doc)):
         page = doc.load_page(page_num)
         pix = page.get_pixmap(dpi=dpi)
         img_array = np.frombuffer(pix.samples, dtype=np.uint8).reshape(pix.height, pix.width, pix.n)
-        
+
         if pix.n == 4:
             img_array = cv2.cvtColor(img_array, cv2.COLOR_RGBA2RGB)
-        
+
         rgb = img_array
         bgr = cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR)
         pages.append((bgr, rgb))
-    
+
     doc.close()
     return pages
 
 
-def _create_thumbnail(card_image: np.ndarray, max_size: Tuple[int, int] = (200, 200)) -> Optional[bytes]:
+def _create_thumbnail(
+    card_image: np.ndarray, max_size: Tuple[int, int] = (200, 200)
+) -> Optional[bytes]:
     """
     Create a thumbnail from card image.
-    
+
     Args:
         card_image: Card image in RGB format (numpy array)
         max_size: Maximum (width, height) for thumbnail
-        
+
     Returns:
         JPEG bytes or None if no image
     """
     if card_image is None:
         return None
-    
+
     try:
         # Convert numpy array to PIL Image
         pil_img = Image.fromarray(card_image)
-        
+
         # Create thumbnail (preserves aspect ratio)
         pil_img.thumbnail(max_size, Image.Resampling.LANCZOS)
-        
+
         # Convert to JPEG bytes
         img_byte_arr = io.BytesIO()
-        pil_img.save(img_byte_arr, format='JPEG', quality=85)
+        pil_img.save(img_byte_arr, format="JPEG", quality=85)
         return img_byte_arr.getvalue()
     except Exception as e:
         print(f"Error creating thumbnail: {e}")
         return None
 
 
-def _contact_data_to_frontend(card: dict, source_file: str, idx: int, run_id: Optional[str] = None) -> dict:
+def _contact_data_to_frontend(
+    card: dict, source_file: str, idx: int, run_id: Optional[str] = None
+) -> dict:
     """Map CardProcessor output dict to the shape the React frontend expects."""
     cd = card.get("contact_data") or {}
     via_qr = card.get("via_qr")
@@ -194,18 +276,20 @@ def _contact_data_to_frontend(card: dict, source_file: str, idx: int, run_id: Op
     else:
         via = "GLM-OCR"
     processing_time = card.get("processing_time", 1.0)
-    
+
     # Create thumbnail if card image exists
     thumbnail = None
     card_image = card.get("card_image")
     has_thumbnail = False
     card_id = None
-    
+
     if card_image is not None:
         thumbnail = _create_thumbnail(card_image)
         if thumbnail is not None:
             # Use pre-generated card_id if available, otherwise generate one
-            card_id = card.get("_card_id") or (f"{run_id}_{idx}" if run_id else f"card_{idx}_{int(time.time())}")
+            card_id = card.get("_card_id") or (
+                f"{run_id}_{idx}" if run_id else f"card_{idx}_{int(time.time())}"
+            )
             _thumbnail_cache[card_id] = thumbnail
             # Persist thumbnail to disk for survival across restarts
             try:
@@ -215,11 +299,11 @@ def _contact_data_to_frontend(card: dict, source_file: str, idx: int, run_id: Op
             except Exception as e:
                 print(f"Error saving thumbnail to disk: {e}")
             has_thumbnail = True
-    
+
     return {
         "id": idx + 1,
         "cardId": card_id,
-        "filename": card.get("filename", f"card_{idx+1}.vcf"),
+        "filename": card.get("filename", f"card_{idx + 1}.vcf"),
         "locked": False,
         "source": source_file,
         "via": via,
@@ -265,7 +349,7 @@ async def _scan_generator(
     all_cards = []
     total_files = len(files)
     run_id = None
-    file_payloads: List[dict] = []   # for history persistence — preserved bytes
+    file_payloads: List[dict] = []  # for history persistence — preserved bytes
 
     try:
         for file_idx, upload in enumerate(files):
@@ -274,24 +358,41 @@ async def _scan_generator(
                 return
             raw = await upload.read()
             filename = upload.filename or f"file_{file_idx}"
-            file_payloads.append({
-                "name": filename,
-                "data": raw,
-                "media_type": "pdf" if filename.lower().endswith(".pdf") else "image",
-            })
+
+            # Upload validation (size cap + extension + magic bytes) BEFORE
+            # any bytes reach cv2.imdecode / fitz.open. Skip bad files.
+            _upload_err = _validate_upload(filename, raw)
+            if _upload_err:
+                yield _sse(
+                    {
+                        "stage": "warning",
+                        "message": f"Skipped '{filename}': {_upload_err}",
+                    }
+                )
+                continue
+
+            file_payloads.append(
+                {
+                    "name": filename,
+                    "data": raw,
+                    "media_type": "pdf" if filename.lower().endswith(".pdf") else "image",
+                }
+            )
 
             progress_base = 10 + int(file_idx / total_files * 30)
-            
+
             # Check if file is PDF
             is_pdf = filename.lower().endswith(".pdf")
-            
+
             if is_pdf:
                 # Process all pages of PDF
-                yield _sse({
-                    "stage": "detect",
-                    "progress": progress_base,
-                    "message": f"Processing PDF '{filename}'…",
-                })
+                yield _sse(
+                    {
+                        "stage": "detect",
+                        "progress": progress_base,
+                        "message": f"Processing PDF '{filename}'…",
+                    }
+                )
                 await asyncio.sleep(0)
 
                 try:
@@ -306,11 +407,13 @@ async def _scan_generator(
                     if cancel_check():
                         yield _sse({"stage": "stopped", "message": "Scan cancelled by user"})
                         return
-                    yield _sse({
-                        "stage": "extract",
-                        "progress": progress_base + int((page_idx + 1) / len(pages) * 10),
-                        "message": f"Extracting data from page {page_idx + 1} of {len(pages)}…",
-                    })
+                    yield _sse(
+                        {
+                            "stage": "extract",
+                            "progress": progress_base + int((page_idx + 1) / len(pages) * 10),
+                            "message": f"Extracting data from page {page_idx + 1} of {len(pages)}…",
+                        }
+                    )
                     await asyncio.sleep(0)
 
                     # Process this page
@@ -326,7 +429,7 @@ async def _scan_generator(
                             grid_rows=rows,
                             grid_cols=cols,
                             cancel_check=cancel_check,
-                        )
+                        ),
                     )
 
                     for card in page_cards:
@@ -335,14 +438,16 @@ async def _scan_generator(
 
                 # Add all cards from PDF pages
                 all_cards.extend(pdf_cards)
-                
+
             else:
                 # Process single image file
-                yield _sse({
-                    "stage": "detect",
-                    "progress": progress_base,
-                    "message": f"Detecting cards in {filename}…",
-                })
+                yield _sse(
+                    {
+                        "stage": "detect",
+                        "progress": progress_base,
+                        "message": f"Detecting cards in {filename}…",
+                    }
+                )
                 await asyncio.sleep(0)
 
                 try:
@@ -351,11 +456,13 @@ async def _scan_generator(
                     yield _sse({"stage": "error", "message": str(e)})
                     return
 
-                yield _sse({
-                    "stage": "extract",
-                    "progress": progress_base + 10,
-                    "message": f"Extracting data from {filename}…",
-                })
+                yield _sse(
+                    {
+                        "stage": "extract",
+                        "progress": progress_base + 10,
+                        "message": f"Extracting data from {filename}…",
+                    }
+                )
                 await asyncio.sleep(0)
 
                 # Run synchronously in executor to avoid blocking event loop
@@ -371,7 +478,7 @@ async def _scan_generator(
                         grid_rows=rows,
                         grid_cols=cols,
                         cancel_check=cancel_check,
-                    )
+                    ),
                 )
 
                 for card in cards:
@@ -409,11 +516,13 @@ async def _scan_generator(
             loop = asyncio.get_event_loop()
             run_id = await loop.run_in_executor(
                 None,
-                lambda: _history.create_run(
-                    settings=settings,
-                    original_files=file_payloads,
-                    processed_cards=processed_cards_payload,
-                ).run_id,
+                lambda: (
+                    _history.create_run(
+                        settings=settings,
+                        original_files=file_payloads,
+                        processed_cards=processed_cards_payload,
+                    ).run_id
+                ),
             )
 
             # Tag cards with stable IDs and mirror to the contacts repository.
@@ -435,6 +544,7 @@ async def _scan_generator(
             # History persistence failure is non-fatal for the user-facing scan,
             # but we log it so silent breakage doesn't hide bugs.
             import traceback
+
             print(f"[history] save failed: {hist_err}", flush=True)
             traceback.print_exc()
 
@@ -444,12 +554,14 @@ async def _scan_generator(
             for i, card in enumerate(all_cards)
         ]
 
-        yield _sse({
-            "stage": "done",
-            "progress": 100,
-            "cards": frontend_cards,
-            "runId": run_id,
-        })
+        yield _sse(
+            {
+                "stage": "done",
+                "progress": 100,
+                "cards": frontend_cards,
+                "runId": run_id,
+            }
+        )
 
     except Exception as exc:
         yield _sse({"stage": "error", "message": str(exc)})
@@ -489,6 +601,7 @@ async def stop_scan():
 # ═══════════════════════════════════════════════════════════
 # CONTACTS
 # ═══════════════════════════════════════════════════════════
+
 
 def _contact_to_api(entry: dict) -> dict:
     """Normalise a repository contact entry for the frontend."""
@@ -546,11 +659,11 @@ async def create_contact(contact_data: dict):
     # Validate required fields
     if not contact_data.get("contact"):
         raise HTTPException(status_code=400, detail="Missing contact data")
-    
+
     # Convert frontend field names to repository format
     frontend_contact = contact_data["contact"]
     repo_contact = {}
-    
+
     # Map field names
     field_map = {
         "fullName": "full_name",
@@ -563,24 +676,24 @@ async def create_contact(contact_data: dict):
         "linkedin": "linkedin",
         "address": "address",
     }
-    
+
     for frontend_key, repo_key in field_map.items():
         if frontend_key in frontend_contact:
             repo_contact[repo_key] = frontend_contact[frontend_key]
-    
+
     # Add contact (add_contact handles duplicates by email)
     contact_id = _contacts.add_contact(
         contact_data=repo_contact,
         source_file=contact_data.get("source", ""),
-        vcf_content=contact_data.get("vcfContent", "")
+        vcf_content=contact_data.get("vcfContent", ""),
     )
-    
+
     # Find the created/updated contact
     contacts = _contacts.get_all()
     created = next((c for c in contacts if c.get("id") == contact_id), None)
     if not created:
         raise HTTPException(status_code=500, detail="Failed to create contact")
-    
+
     return {"ok": True, "contact": _contact_to_api(created)}
 
 
@@ -590,11 +703,11 @@ async def update_contact(contact_id: str, contact_data: dict):
     # Validate required fields
     if not contact_data.get("contact"):
         raise HTTPException(status_code=400, detail="Missing contact data")
-    
+
     # Convert frontend field names to repository format
     frontend_contact = contact_data["contact"]
     repo_contact = {}
-    
+
     # Map field names
     field_map = {
         "fullName": "full_name",
@@ -607,16 +720,16 @@ async def update_contact(contact_id: str, contact_data: dict):
         "linkedin": "linkedin",
         "address": "address",
     }
-    
+
     for frontend_key, repo_key in field_map.items():
         if frontend_key in frontend_contact:
             repo_contact[repo_key] = frontend_contact[frontend_key]
-    
+
     # Update contact
     updated = _contacts.update_contact(contact_id, repo_contact)
     if not updated:
         raise HTTPException(status_code=404, detail="Contact not found")
-    
+
     return {"ok": True, "contact": _contact_to_api(updated)}
 
 
@@ -656,25 +769,32 @@ async def export_contacts_csv():
 # HISTORY
 # ═══════════════════════════════════════════════════════════
 
+
 def _run_to_api(entry) -> dict:
     """Convert HistoryEntry to frontend RunCard shape."""
     d = history_entry_to_dict(entry)
     cards_out = []
     for card in d.get("cards", []):
         cd = card.get("contact_data") or {}
-        cards_out.append({
-            "contact": {
-                "fullName": cd.get("full_name") or cd.get("name", ""),
-                "company": cd.get("company", ""),
-                "email": cd.get("email", ""),
-                "phone": cd.get("phone", ""),
+        cards_out.append(
+            {
+                "contact": {
+                    "fullName": cd.get("full_name") or cd.get("name", ""),
+                    "company": cd.get("company", ""),
+                    "email": cd.get("email", ""),
+                    "phone": cd.get("phone", ""),
+                }
             }
-        })
-    exports_out = [f.get("name", "") for f in d.get("files", []) if f.get("media_type") not in ("image",)]
+        )
+    exports_out = [
+        f.get("name", "") for f in d.get("files", []) if f.get("media_type") not in ("image",)
+    ]
     original_files = d.get("settings", {}).get("_original_files", []) or []
     return {
         "id": d["run_id"],
-        "createdAt": d["created_at"].replace("T", "T") if "T" in d.get("created_at", "") else d.get("created_at", "") + "T00:00:00",
+        "createdAt": d["created_at"].replace("T", "T")
+        if "T" in d.get("created_at", "")
+        else d.get("created_at", "") + "T00:00:00",
         "settings": d.get("settings", {}),
         "cards": cards_out,
         "originalFiles": original_files,
@@ -694,6 +814,7 @@ async def list_history():
 
 @app.delete("/api/history/{run_id}")
 async def delete_history(run_id: str):
+    run_id = _safe_run_id(run_id)  # path-traversal guard
     try:
         _history.delete_run(run_id)
         return {"ok": True}
@@ -703,6 +824,7 @@ async def delete_history(run_id: str):
 
 @app.get("/api/history/{run_id}/zip")
 async def download_history_zip(run_id: str):
+    run_id = _safe_run_id(run_id)  # path-traversal guard
     try:
         zip_bytes = _history.build_run_package(run_id)
         return StreamingResponse(
@@ -718,14 +840,17 @@ async def download_history_zip(run_id: str):
 # THUMBNAIL ENDPOINTS
 # ═══════════════════════════════════════════════════════════
 
+
 @app.get("/api/thumbnails/{card_id}")
 async def get_thumbnail(card_id: str):
     """Get thumbnail image for a card."""
+    # Path-traversal guard: validate card_id and resolve a contained path.
+    thumb_path = _safe_thumb_path(card_id)
+
     thumbnail = _thumbnail_cache.get(card_id)
-    
-    # Fallback: try loading from disk
+
+    # Fallback: try loading from disk (path already validated + contained)
     if thumbnail is None:
-        thumb_path = os.path.join(THUMBNAIL_DIR, f"{card_id}.jpg")
         if os.path.exists(thumb_path):
             try:
                 with open(thumb_path, "rb") as f:
@@ -733,20 +858,21 @@ async def get_thumbnail(card_id: str):
                 _thumbnail_cache[card_id] = thumbnail
             except Exception:
                 pass
-    
+
     if thumbnail is None:
         raise HTTPException(status_code=404, detail="Thumbnail not found")
-    
+
     return StreamingResponse(
         io.BytesIO(thumbnail),
         media_type="image/jpeg",
-        headers={"Cache-Control": "public, max-age=3600"}
+        headers={"Cache-Control": "public, max-age=3600"},
     )
 
 
 # ═══════════════════════════════════════════════════════════
 # HTML FRONTEND
 # ═══════════════════════════════════════════════════════════
+
 
 @app.get("/", response_class=HTMLResponse)
 async def serve_frontend():
@@ -762,5 +888,6 @@ async def serve_frontend():
 
 if __name__ == "__main__":
     import uvicorn
+
     port = int(os.environ.get("PORT", "8501"))
     uvicorn.run("server:app", host="0.0.0.0", port=port, reload=True)
