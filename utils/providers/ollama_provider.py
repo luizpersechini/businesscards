@@ -10,6 +10,7 @@ Strategy:
 """
 
 import json
+import logging
 import os
 import re
 import time
@@ -21,6 +22,39 @@ from .base import VisionProvider
 
 from ..models import ProviderType, ProviderStatus, ProviderConfig, ScanResult
 
+logger = logging.getLogger(__name__)
+
+# Probe optional OCR-parser dependencies once at import time so we can:
+#   1. Log a clear, actionable warning if any are missing (instead of
+#      silently dropping fields, which is what `except ImportError: pass`
+#      used to do — and led to undetected production regressions).
+#   2. Skip the per-card try/import overhead.
+try:
+    import phonenumbers as _phonenumbers  # noqa: F401
+
+    PHONENUMBERS_AVAILABLE = True
+except ImportError as _e:
+    PHONENUMBERS_AVAILABLE = False
+    logger.error(
+        "phonenumbers missing — phone numbers will NOT be extracted. "
+        "Install with: pip install phonenumbers  (error: %s)",
+        _e,
+    )
+
+try:
+    import probablepeople as _pp  # noqa: F401
+    from probableparsing import RepeatedLabelError as _RLE  # noqa: F401
+
+    PROBABLEPEOPLE_AVAILABLE = True
+except ImportError as _e:
+    PROBABLEPEOPLE_AVAILABLE = False
+    logger.error(
+        "probablepeople missing — name/company classification will degrade "
+        "to a brittle regex fallback that often misclassifies. "
+        "Install with: pip install probablepeople  (error: %s)",
+        _e,
+    )
+
 # Models that are OCR-specialised and respond to plain "read text" prompts,
 # NOT to JSON schema / instruction-following prompts.
 _OCR_ONLY_MODELS = ("glm-ocr",)
@@ -30,13 +64,13 @@ class OllamaVisionProvider(VisionProvider):
     """Ollama-based vision provider for local model inference."""
 
     DEFAULT_VISION_MODELS = [
-        'glm-ocr',          # OCR-specialised, default (#1 OmniDocBench)
-        'qwen2.5vl',        # Strong general VLM fallback (96.4% DocVQA, 88.8% OCRBench)
-        'llama3.2-vision',
-        'llava:13b',
-        'llava',
-        'bakllava',
-        'moondream',
+        "glm-ocr",  # OCR-specialised, default (#1 OmniDocBench)
+        "qwen2.5vl",  # Strong general VLM fallback (96.4% DocVQA, 88.8% OCRBench)
+        "llama3.2-vision",
+        "llava:13b",
+        "llava",
+        "bakllava",
+        "moondream",
     ]
 
     def __init__(self, config: Optional[ProviderConfig] = None):
@@ -66,7 +100,10 @@ class OllamaVisionProvider(VisionProvider):
             if resp.status_code == 200:
                 for m in resp.json().get("models", []):
                     name = m.get("name", "")
-                    if any(kw in name.lower() for kw in ["glm-ocr", "qwen", "vision", "llava", "bakllava", "moondream"]):
+                    if any(
+                        kw in name.lower()
+                        for kw in ["glm-ocr", "qwen", "vision", "llava", "bakllava", "moondream"]
+                    ):
                         return name
         except Exception:
             pass
@@ -92,8 +129,8 @@ class OllamaVisionProvider(VisionProvider):
             # ── Step 2: check installed models ────────────────────────────
             response = requests.get(f"{self.api_url}/api/tags", timeout=3)
             if response.status_code == 200:
-                models = response.json().get('models', [])
-                model_names = [m.get('name', '') for m in models]
+                models = response.json().get("models", [])
+                model_names = [m.get("name", "") for m in models]
 
                 # Configured model installed?
                 if any(self.config.model_name in name for name in model_names):
@@ -101,7 +138,10 @@ class OllamaVisionProvider(VisionProvider):
 
                 # Any vision model installed?
                 for name in model_names:
-                    if any(kw in name.lower() for kw in ['glm-ocr', 'qwen', 'vision', 'llava', 'bakllava', 'moondream']):
+                    if any(
+                        kw in name.lower()
+                        for kw in ["glm-ocr", "qwen", "vision", "llava", "bakllava", "moondream"]
+                    ):
                         self.config.model_name = name
                         return ProviderStatus.AVAILABLE
 
@@ -130,7 +170,9 @@ class OllamaVisionProvider(VisionProvider):
             return self._make_scan_result(None, start_time, error="Invalid or empty image")
 
         if len(card_image.shape) < 2 or card_image.shape[0] < 10 or card_image.shape[1] < 10:
-            return self._make_scan_result(None, start_time, error=f"Image too small: {card_image.shape}")
+            return self._make_scan_result(
+                None, start_time, error=f"Image too small: {card_image.shape}"
+            )
 
         try:
             # Encode image — use compressed JPEG at 1024px max to keep payload small
@@ -143,7 +185,7 @@ class OllamaVisionProvider(VisionProvider):
                 # Do NOT send a JSON schema — these models copy example values
                 # instead of reading the image.
                 prompt = self._build_ocr_prompt()
-                num_predict = 400   # raw text is shorter than JSON
+                num_predict = 400  # raw text is shorter than JSON
             else:
                 # Instruction-following LLM vision models (llama3.2-vision, llava…)
                 prompt = self.build_extraction_prompt(qr_data)
@@ -155,12 +197,12 @@ class OllamaVisionProvider(VisionProvider):
                 "prompt": prompt,
                 "images": [image_b64],
                 "stream": False,
-                "keep_alive": -1,   # keep model loaded in memory between requests
+                "keep_alive": -1,  # keep model loaded in memory between requests
                 "options": {
                     "temperature": self.config.temperature,
                     "top_p": 0.9,
                     "num_predict": num_predict,
-                }
+                },
             }
 
             # For instruction-following LLM vision models (NOT pure OCR
@@ -173,14 +215,12 @@ class OllamaVisionProvider(VisionProvider):
                 payload["format"] = self._contact_json_schema()
 
             response = requests.post(
-                f"{self.api_url}/api/generate",
-                json=payload,
-                timeout=self.config.timeout
+                f"{self.api_url}/api/generate", json=payload, timeout=self.config.timeout
             )
 
             if response.status_code == 200:
                 result = response.json()
-                response_text = result.get('response', '').strip()
+                response_text = result.get("response", "").strip()
 
                 if self._is_ocr_model():
                     # Merge QR data (higher confidence) on top of OCR parse
@@ -196,25 +236,30 @@ class OllamaVisionProvider(VisionProvider):
                     # parser couldn't handle. ~2-5s extra per card.
                     correction_model = os.environ.get("OCR_POST_CORRECTION_MODEL", "").strip()
                     if correction_model:
-                        contact_dict = self._llm_post_correct(
-                            raw_text=response_text,
-                            parsed=contact_dict,
-                            model=correction_model,
-                        ) or contact_dict
+                        contact_dict = (
+                            self._llm_post_correct(
+                                raw_text=response_text,
+                                parsed=contact_dict,
+                                model=correction_model,
+                            )
+                            or contact_dict
+                        )
                 else:
                     contact_dict = self.parse_json_response(response_text)
 
                 return self._make_scan_result(contact_dict, start_time, qr_used=bool(qr_data))
             else:
                 return self._make_scan_result(
-                    None, start_time,
-                    error=f"Ollama API error {response.status_code}: {response.text[:200]}"
+                    None,
+                    start_time,
+                    error=f"Ollama API error {response.status_code}: {response.text[:200]}",
                 )
 
         except requests.exceptions.Timeout:
             return self._make_scan_result(
-                None, start_time,
-                error=f"Timeout after {self.config.timeout}s. Try a faster model or increase timeout."
+                None,
+                start_time,
+                error=f"Timeout after {self.config.timeout}s. Try a faster model or increase timeout.",
             )
         except Exception as e:
             return self._make_scan_result(None, start_time, error=str(e))
@@ -264,12 +309,24 @@ class OllamaVisionProvider(VisionProvider):
             "type": "object",
             "additionalProperties": False,
             "properties": {
-                key: nullable_string for key in [
-                    "firstName", "lastName", "fullName",
-                    "title", "company",
-                    "email", "phone", "mobile",
-                    "address", "city", "state", "zip", "country",
-                    "website", "linkedin", "notes",
+                key: nullable_string
+                for key in [
+                    "firstName",
+                    "lastName",
+                    "fullName",
+                    "title",
+                    "company",
+                    "email",
+                    "phone",
+                    "mobile",
+                    "address",
+                    "city",
+                    "state",
+                    "zip",
+                    "country",
+                    "website",
+                    "linkedin",
+                    "notes",
                 ]
             },
         }
@@ -354,25 +411,35 @@ class OllamaVisionProvider(VisionProvider):
             www.acme.com
         """
         contact: Dict = {
-            "firstName": None, "lastName": None, "fullName": None,
-            "title": None, "company": None,
-            "email": None, "phone": None, "mobile": None,
-            "address": None, "city": None, "state": None,
-            "zip": None, "country": None,
-            "website": None, "linkedin": None, "notes": None,
+            "firstName": None,
+            "lastName": None,
+            "fullName": None,
+            "title": None,
+            "company": None,
+            "email": None,
+            "phone": None,
+            "mobile": None,
+            "address": None,
+            "city": None,
+            "state": None,
+            "zip": None,
+            "country": None,
+            "website": None,
+            "linkedin": None,
+            "notes": None,
         }
 
         if not raw_text:
             return contact
 
         # Strip markdown formatting characters
-        clean = re.sub(r'[*_#`>]', ' ', raw_text)
-        lines = [l.strip() for l in clean.split('\n') if l.strip()]
+        clean = re.sub(r"[*_#`>]", " ", raw_text)
+        lines = [l.strip() for l in clean.split("\n") if l.strip()]
 
-        consumed: set = set()   # line indices already assigned to a field
+        consumed: set = set()  # line indices already assigned to a field
 
         # ── Email ──────────────────────────────────────────────────────────
-        email_re = re.compile(r'[\w.+%-]+@[\w.-]+\.[a-zA-Z]{2,}', re.I)
+        email_re = re.compile(r"[\w.+%-]+@[\w.-]+\.[a-zA-Z]{2,}", re.I)
         for i, line in enumerate(lines):
             m = email_re.search(line)
             if m:
@@ -384,24 +451,23 @@ class OllamaVisionProvider(VisionProvider):
         for i, line in enumerate(lines):
             if i in consumed:
                 continue
-            if 'linkedin.com' in line.lower():
+            if "linkedin.com" in line.lower():
                 contact["linkedin"] = line.strip()
                 consumed.add(i)
                 break
 
         # ── Website ────────────────────────────────────────────────────────
         web_re = re.compile(
-            r'(?:https?://|www\.)\S+|[\w.-]+\.(?:com|br|net|org|io|ca|co|app)\b',
-            re.I
+            r"(?:https?://|www\.)\S+|[\w.-]+\.(?:com|br|net|org|io|ca|co|app)\b", re.I
         )
         for i, line in enumerate(lines):
             if i in consumed:
                 continue
-            if 'linkedin.com' in line.lower():
+            if "linkedin.com" in line.lower():
                 continue
             m = web_re.search(line)
-            if m and '@' not in line:   # exclude email lines
-                contact["website"] = m.group(0).rstrip('/')
+            if m and "@" not in line:  # exclude email lines
+                contact["website"] = m.group(0).rstrip("/")
                 consumed.add(i)
                 break
 
@@ -412,72 +478,76 @@ class OllamaVisionProvider(VisionProvider):
         # 3. Weak company indicators (need additional context)
         corp_re = re.compile(
             # Company suffixes (strong indicators)
-            r'(?:^|\s)(?:ltda|ltd\.?|s\.?a\.?|inc\.?|corp\.?|corporation|incorporated|gmbh|ag|co\.?|plc|nv|spa|bv|ab|oyj)\.?\s*$',
-            re.I
+            r"(?:^|\s)(?:ltda|ltd\.?|s\.?a\.?|inc\.?|corp\.?|corporation|incorporated|gmbh|ag|co\.?|plc|nv|spa|bv|ab|oyj)\.?\s*$",
+            re.I,
         )
         company_strong_kw = re.compile(
             # Strong company keywords (rarely appear in person names)
             # Use (?:^|\W) and (?:\W|$) instead of \b so we match infix too
             # (e.g. "bank" in "Citibank", "tech" in "Infotech")
-            r'(?:^|\W)(?:banco|bank|financeira|finance|seguros|insurance|holding'
-            r'|tecnologia|technology|sistemas|systems|construção|construction'
-            r'|imóveis|realty|imobiliária|agroindustrial|agrícola|mineração'
-            r'|petróleo|petroleum|energia|energy|telecomunicações|telecom'
-            r'|transportes|transport|logística|logistics|distribuição|distribution'
-            r'|varejo|retail|atacado|wholesale|indústria|industry|fábrica|factory'
-            r'|laboratório|laboratory|clínica|clinic|hospital|universidade|university'
-            r'|escola|school|faculdade|college|instituto|institute|centro|center'
-            r'|fundação|foundation|associação|association|cooperativa|cooperative'
-            r'|consórcio|consortium|conglomerado|conglomerate|multinacional|multinational'
+            r"(?:^|\W)(?:banco|bank|financeira|finance|seguros|insurance|holding"
+            r"|tecnologia|technology|sistemas|systems|construção|construction"
+            r"|imóveis|realty|imobiliária|agroindustrial|agrícola|mineração"
+            r"|petróleo|petroleum|energia|energy|telecomunicações|telecom"
+            r"|transportes|transport|logística|logistics|distribuição|distribution"
+            r"|varejo|retail|atacado|wholesale|indústria|industry|fábrica|factory"
+            r"|laboratório|laboratory|clínica|clinic|hospital|universidade|university"
+            r"|escola|school|faculdade|college|instituto|institute|centro|center"
+            r"|fundação|foundation|associação|association|cooperativa|cooperative"
+            r"|consórcio|consortium|conglomerado|conglomerate|multinacional|multinational"
             # Well-known Brazilian and global bank/finance brands
-            r'|citibank|citi|bradesco|itau|itaú|santander|nubank|inter|caixa'
-            r'|bb\s+seguros|bancodo\s*brasil|banco\s+do\s+brasil'
-            r'|hsbc|jpmorgan|jpmc|morgan\s*stanley|goldman\s*sachs|deutsche'
-            r'|ubs|credit\s*suisse|barclays|bnp\s*paribas|societe\s*generale'
-            r'|btg\s*pactual|xp\s*investimentos|safra|bmg|pan\s+americano'
-            r'|merrill\s*lynch|wells\s*fargo|bank\s*of\s*america)(?:\W|$)',
-            re.I
+            r"|citibank|citi|bradesco|itau|itaú|santander|nubank|inter|caixa"
+            r"|bb\s+seguros|bancodo\s*brasil|banco\s+do\s+brasil"
+            r"|hsbc|jpmorgan|jpmc|morgan\s*stanley|goldman\s*sachs|deutsche"
+            r"|ubs|credit\s*suisse|barclays|bnp\s*paribas|societe\s*generale"
+            r"|btg\s*pactual|xp\s*investimentos|safra|bmg|pan\s+americano"
+            r"|merrill\s*lynch|wells\s*fargo|bank\s*of\s*america)(?:\W|$)",
+            re.I,
         )
         company_weak_kw = re.compile(
             # Weak company keywords (can appear in person names, titles, or companies)
             # Use (?:^|\W) and (?:\W|$) instead of \b for infix matching
-            r'(?:^|\W)(?:consultoria|consulting|soluções|solutions|serviços|services'
-            r'|grupo|group|global|internacional|international|nacional|national'
-            r'|brasileira|brazilian|americana|american|europeia|european|mundial|worldwide'
-            r'|digital|online|web|software|hardware|cloud|data|info|media|marketing'
-            r'|comunicação|communication|publicidade|advertising|design|arquitetura|architecture'
-            r'|engenharia|engineering|projetos|projects|gestão|management|administração|administration'
-            r'|recursos|resources|capital|investimentos|investments|desenvolvimento|development'
-            r'|pesquisa|research|inovação|innovation|qualidade|quality|segurança|security)(?:\W|$)',
-            re.I
+            r"(?:^|\W)(?:consultoria|consulting|soluções|solutions|serviços|services"
+            r"|grupo|group|global|internacional|international|nacional|national"
+            r"|brasileira|brazilian|americana|american|europeia|european|mundial|worldwide"
+            r"|digital|online|web|software|hardware|cloud|data|info|media|marketing"
+            r"|comunicação|communication|publicidade|advertising|design|arquitetura|architecture"
+            r"|engenharia|engineering|projetos|projects|gestão|management|administração|administration"
+            r"|recursos|resources|capital|investimentos|investments|desenvolvimento|development"
+            r"|pesquisa|research|inovação|innovation|qualidade|quality|segurança|security)(?:\W|$)",
+            re.I,
         )
         title_kw = re.compile(
-            r'\b(gerente|diretor|director|manager|ceo|cto|cfo|coo|cso|cmo|cpo'
-            r'|vp|vice.president|vice.presidente|president|presidente'
-            r'|coordinator|coordenador|engenheiro|engineer'
-            r'|analista|analyst|consultor|consultant|vendas|sales|técnico|technician'
-            r'|representative|representante|supervisor|especialista|specialist'
-            r'|executive|executiv|account|associate|assistente|assistant'
-            r'|contador|accountant|advogado|lawyer|médico|doctor|enfermeiro'
+            r"\b(gerente|diretor|director|manager|ceo|cto|cfo|coo|cso|cmo|cpo"
+            r"|vp|vice.president|vice.presidente|president|presidente"
+            r"|coordinator|coordenador|engenheiro|engineer"
+            r"|analista|analyst|consultor|consultant|vendas|sales|técnico|technician"
+            r"|representative|representante|supervisor|especialista|specialist"
+            r"|executive|executiv|account|associate|assistente|assistant"
+            r"|contador|accountant|advogado|lawyer|médico|doctor|enfermeiro"
             # English seniority / function words that appear in titles
-            r'|officer|chief|head|leader|principal|partner|founder|co-founder'
-            r'|chairman|treasurer|controller|strategist|advisor|adviser'
-            r'|developer|architect|scientist|researcher|analyst|intern'
-            r'|treasurer|director|managing|senior|junior|staff|lead'
+            r"|officer|chief|head|leader|principal|partner|founder|co-founder"
+            r"|chairman|treasurer|controller|strategist|advisor|adviser"
+            r"|developer|architect|scientist|researcher|analyst|intern"
+            r"|treasurer|director|managing|senior|junior|staff|lead"
             # Finance / banking specific
-            r'|banker|trader|broker|underwriter|portfolio|relationship'
-            r'|structured|project\s+finance|corporate\s+development'
-            r'|treasury|securities|decarbonization|commercial)\b',
-            re.I
+            r"|banker|trader|broker|underwriter|portfolio|relationship"
+            r"|structured|project\s+finance|corporate\s+development"
+            r"|treasury|securities|decarbonization|commercial)\b",
+            re.I,
         )
         # Brazilian ZIP (CEP): NNNNN-NNN — used to identify ZIP lines below.
-        cep_re = re.compile(r'^\d{5}-\d{3}$')
+        cep_re = re.compile(r"^\d{5}-\d{3}$")
 
         # ── Phone numbers (Google libphonenumber) ────────────────────────────
         # PhoneNumberMatcher handles +55, mobile-9 prefix, area codes, intl
         # formats, and importantly REJECTS CEPs (NNNNN-NNN) automatically.
-        try:
+        # If phonenumbers is unavailable, the module-level probe at the top
+        # of this file has already logged an actionable error; skip silently
+        # here to avoid 18 redundant log lines per scan.
+        if PHONENUMBERS_AVAILABLE:
             import phonenumbers
+
             phones_found: List[str] = []
             for i, line in enumerate(lines):
                 if i in consumed:
@@ -495,10 +565,6 @@ class OllamaVisionProvider(VisionProvider):
                 contact["phone"] = phones_found[0]
                 if len(phones_found) > 1:
                     contact["mobile"] = phones_found[1]
-        except ImportError:
-            # phonenumbers not installed — leave phone fields empty rather
-            # than fall back to the brittle regex that misidentified CEPs.
-            pass
 
         # ── Store ZIP if found (look for CEP-format lines) ────────────────
         for i, line in enumerate(lines):
@@ -513,24 +579,22 @@ class OllamaVisionProvider(VisionProvider):
         # Must run BEFORE company/name detection so address text is consumed
         # and never mistaken for a company or name.
         addr_kw_re = re.compile(
-            r'\b(?:av\.?|avenida|rua|r\.|alameda|al\.|travessa|tv\.'
-            r'|estrada|rodovia|blvd|boulevard|praça|pca\.'
-            r'|street|st\.|avenue|ave\.?|road|rd\.'
-            r'|drive|dr\.|lane|ln\.|suite|ste\.?|apt\.?|floor|fl\.?'
-            r'|andar|sala|cj\.?|conjunto|loja)\b',
-            re.I
+            r"\b(?:av\.?|avenida|rua|r\.|alameda|al\.|travessa|tv\."
+            r"|estrada|rodovia|blvd|boulevard|praça|pca\."
+            r"|street|st\.|avenue|ave\.?|road|rd\."
+            r"|drive|dr\.|lane|ln\.|suite|ste\.?|apt\.?|floor|fl\.?"
+            r"|andar|sala|cj\.?|conjunto|loja)\b",
+            re.I,
         )
         # "City, ST" or "City - ST" patterns (2-letter state/province code)
-        city_state_re = re.compile(
-            r'^[A-ZÀ-Ú][A-Za-zÀ-ú\s\-]+(?:,\s*|-\s*)[A-Z]{2}$'
-        )
+        city_state_re = re.compile(r"^[A-ZÀ-Ú][A-Za-zÀ-ú\s\-]+(?:,\s*|-\s*)[A-Z]{2}$")
         # Country: match only when the whole line IS the country name
         # (prevents "Banco do Brasil" from triggering on "brasil")
         country_re = re.compile(
-            r'^(?:brasil|brazil|usa|united\s+states|estados\s+unidos'
-            r'|argentina|portugal|mexico|méxico|chile|colômbia|colombia'
-            r'|france|germany|espanha|spain|italia|italy|canada)\s*$',
-            re.I
+            r"^(?:brasil|brazil|usa|united\s+states|estados\s+unidos"
+            r"|argentina|portugal|mexico|méxico|chile|colômbia|colombia"
+            r"|france|germany|espanha|spain|italia|italy|canada)\s*$",
+            re.I,
         )
 
         for i, line in enumerate(lines):
@@ -546,7 +610,7 @@ class OllamaVisionProvider(VisionProvider):
                 continue
             stripped = line.strip()
             if city_state_re.match(stripped):
-                parts = re.split(r',\s*|-\s*', stripped, 1)
+                parts = re.split(r",\s*|-\s*", stripped, 1)
                 if not contact["city"]:
                     contact["city"] = parts[0].strip()
                 if len(parts) > 1 and not contact["state"]:
@@ -568,10 +632,15 @@ class OllamaVisionProvider(VisionProvider):
         # We use it to drive BOTH name and company detection — eliminating
         # the brittle heuristics that previously misclassified e.g.
         # "Banco do Brasil" as a person.
-        pp_results: Dict[int, tuple] = {}   # idx -> (kind, parsed_dict)
-        try:
+        # If probablepeople is unavailable, the module-level probe at the
+        # top of this file has already logged an actionable error. Fall
+        # through to the regex-based fallbacks below — they're brittle but
+        # not nothing.
+        pp_results: Dict[int, tuple] = {}  # idx -> (kind, parsed_dict)
+        if PROBABLEPEOPLE_AVAILABLE:
             import probablepeople as pp  # type: ignore
             from probableparsing import RepeatedLabelError  # type: ignore
+
             for i, line in enumerate(lines):
                 if i in consumed:
                     continue
@@ -579,9 +648,9 @@ class OllamaVisionProvider(VisionProvider):
                 words = line_stripped.split()
                 if not (1 <= len(words) <= 6):
                     continue
-                if re.search(r'\d', line_stripped):
+                if re.search(r"\d", line_stripped):
                     continue
-                if re.search(r'[@#&/\\|<>{}[\]()=+*%$!^~;]', line_stripped):
+                if re.search(r"[@#&/\\|<>{}[\]()=+*%$!^~;]", line_stripped):
                     continue
                 # Skip all-caps logos / department headers — pp can't tell
                 # them apart from company names reliably
@@ -594,8 +663,6 @@ class OllamaVisionProvider(VisionProvider):
                     pass
                 except Exception:
                     pass
-        except ImportError:
-            pass
 
         # ── Name detection (probablepeople Person classification) ──────────
         for i, (kind, parsed) in pp_results.items():
@@ -604,7 +671,7 @@ class OllamaVisionProvider(VisionProvider):
             # GivenName + (MiddleName) + Surname + (SuffixGenerational)
             given = parsed.get("GivenName", "")
             surname_parts = [
-                parsed.get("MiddleName", ""),       # e.g. "da", "de", middle
+                parsed.get("MiddleName", ""),  # e.g. "da", "de", middle
                 parsed.get("MiddleInitial", ""),
                 parsed.get("Surname", ""),
                 parsed.get("SuffixGenerational", ""),  # Jr., Sr., II
@@ -623,9 +690,9 @@ class OllamaVisionProvider(VisionProvider):
                 words = line.split()
                 if not (2 <= len(words) <= 5):
                     continue
-                if re.search(r'\d', line):
+                if re.search(r"\d", line):
                     continue
-                if re.search(r'[@#&/\\|<>{}[\]()=+*%$!^~;]', line):
+                if re.search(r"[@#&/\\|<>{}[\]()=+*%$!^~;]", line):
                     continue
                 if line == line.upper() and len(line) > 3:
                     continue
@@ -655,9 +722,26 @@ class OllamaVisionProvider(VisionProvider):
         # 5. Email domain inference (last resort)
 
         # Free email domains (for domain-based company inference)
-        _free_domains = {"gmail", "yahoo", "hotmail", "outlook", "icloud",
-                         "live", "msn", "uol", "bol", "terra", "ig", "protonmail",
-                         "aol", "zoho", "yandex", "mail", "gmx", "tutanota"}
+        _free_domains = {
+            "gmail",
+            "yahoo",
+            "hotmail",
+            "outlook",
+            "icloud",
+            "live",
+            "msn",
+            "uol",
+            "bol",
+            "terra",
+            "ig",
+            "protonmail",
+            "aol",
+            "zoho",
+            "yandex",
+            "mail",
+            "gmx",
+            "tutanota",
+        }
 
         # Step 1: trust probablepeople's Corporation classification first.
         for i, (kind, _) in pp_results.items():
@@ -670,20 +754,20 @@ class OllamaVisionProvider(VisionProvider):
 
         # Track potential company lines with confidence scores
         company_candidates = []
-        
+
         for i, line in enumerate(lines):
             if i in consumed:
                 continue
-            
+
             line_stripped = line.strip()
             confidence = 0
-            
+
             # 1. Strong indicators: company suffixes at end of line
             if corp_re.search(line_stripped):
                 confidence = 100  # Very high confidence
                 company_candidates.append((i, line_stripped, confidence))
                 continue
-            
+
             # 2. Strong company keywords in line
             if company_strong_kw.search(line_stripped):
                 confidence = 80  # High confidence
@@ -692,21 +776,27 @@ class OllamaVisionProvider(VisionProvider):
                     confidence += 10
                 company_candidates.append((i, line_stripped, confidence))
                 continue
-            
+
             # 3. Weak company keywords - lower confidence
             if company_weak_kw.search(line_stripped):
                 confidence = 40  # Medium confidence
                 company_candidates.append((i, line_stripped, confidence))
                 continue
-            
+
             # 4. Position-based heuristic: lines after name/title are more likely companies
             # Find if we already detected a name or title before this line
-            has_name_before = any(j < i and (lines[j] in consumed or 
-                                            (contact.get("firstName") and 
-                                             lines[j].find(contact["firstName"]) >= 0)) 
-                                 for j in range(max(0, i-3), i))
-            has_title_before = any(j < i and title_kw.search(lines[j]) for j in range(max(0, i-2), i))
-            
+            has_name_before = any(
+                j < i
+                and (
+                    lines[j] in consumed
+                    or (contact.get("firstName") and lines[j].find(contact["firstName"]) >= 0)
+                )
+                for j in range(max(0, i - 3), i)
+            )
+            has_title_before = any(
+                j < i and title_kw.search(lines[j]) for j in range(max(0, i - 2), i)
+            )
+
             if has_name_before or has_title_before:
                 # This line appears after name/title - could be company
                 # Check if it looks like a company (not like a person name)
@@ -717,11 +807,33 @@ class OllamaVisionProvider(VisionProvider):
                     if len(words) == 1:
                         # Single word - could be company or last name
                         # Check if it looks like a common last name vs company
-                        common_last_names = {'silva', 'santos', 'oliveira', 'souza', 'rodrigues', 
-                                           'ferreira', 'alves', 'pereira', 'lima', 'gomes', 
-                                           'ribeiro', 'martins', 'carvalho', 'almeida', 'lopes',
-                                           'smith', 'johnson', 'williams', 'brown', 'jones',
-                                           'garcia', 'miller', 'davis', 'rodriguez', 'martinez'}
+                        common_last_names = {
+                            "silva",
+                            "santos",
+                            "oliveira",
+                            "souza",
+                            "rodrigues",
+                            "ferreira",
+                            "alves",
+                            "pereira",
+                            "lima",
+                            "gomes",
+                            "ribeiro",
+                            "martins",
+                            "carvalho",
+                            "almeida",
+                            "lopes",
+                            "smith",
+                            "johnson",
+                            "williams",
+                            "brown",
+                            "jones",
+                            "garcia",
+                            "miller",
+                            "davis",
+                            "rodriguez",
+                            "martinez",
+                        }
                         if line_stripped.lower() not in common_last_names:
                             confidence = 30
                             company_candidates.append((i, line_stripped, confidence))
@@ -731,10 +843,10 @@ class OllamaVisionProvider(VisionProvider):
                         if all(word and word[0].isupper() for word in words):
                             confidence = 50
                             company_candidates.append((i, line_stripped, confidence))
-        
+
         # Sort candidates by confidence (highest first)
         company_candidates.sort(key=lambda x: x[2], reverse=True)
-        
+
         # Select the best candidate (only if probablepeople didn't already
         # set a Corporation match in step 1).
         if not contact.get("company") and company_candidates:
@@ -743,7 +855,7 @@ class OllamaVisionProvider(VisionProvider):
             if best_conf >= 30:
                 contact["company"] = best_line
                 consumed.add(best_idx)
-        
+
         # Fallback: if no company found, use domain inference from email
         if not contact["company"] and contact.get("email"):
             try:
@@ -751,8 +863,7 @@ class OllamaVisionProvider(VisionProvider):
                 if domain_stem and domain_stem not in _free_domains:
                     # Short stems (≤ 3 chars) stay ALL-CAPS; longer ones are Title-cased
                     contact["company"] = (
-                        domain_stem.upper() if len(domain_stem) <= 3
-                        else domain_stem.capitalize()
+                        domain_stem.upper() if len(domain_stem) <= 3 else domain_stem.capitalize()
                     )
             except (IndexError, AttributeError):
                 pass
@@ -764,11 +875,12 @@ class OllamaVisionProvider(VisionProvider):
         try:
             response = requests.get(f"{self.api_url}/api/tags", timeout=3)
             if response.status_code == 200:
-                models = response.json().get('models', [])
-                vision_keywords = ['glm-ocr', 'qwen', 'vision', 'llava', 'bakllava', 'moondream']
+                models = response.json().get("models", [])
+                vision_keywords = ["glm-ocr", "qwen", "vision", "llava", "bakllava", "moondream"]
                 return [
-                    m['name'] for m in models
-                    if any(kw in m['name'].lower() for kw in vision_keywords)
+                    m["name"]
+                    for m in models
+                    if any(kw in m["name"].lower() for kw in vision_keywords)
                 ]
         except Exception:
             pass

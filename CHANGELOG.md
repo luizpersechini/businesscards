@@ -2,6 +2,18 @@
 
 All notable changes to the Business Card Scanner project will be documented in this file.
 
+## [2.1.2] — 2026-05-26
+
+### Fixed
+
+- **Silent dependency-missing regression on phone & name extraction.** `phonenumbers` and `probablepeople` were declared in `requirements.txt` but never `pip install`ed into the runtime Python 3.9. Both per-card try-imports in `utils/providers/ollama_provider.py` (lines 498 and 597 in 2.1.1) had `except ImportError: pass` with no log — so the OCR parser silently dropped every phone field and fell back to brittle regex name/company detection on every scan, for an unknown number of runs. On a single test image this surfaced as 3/18 phones (vs 17/18 once libs were installed) and the `company: "São Paulo, SP, Brazil"` (address misclassified as company) symptom.
+
+### Changed
+
+- Replaced both per-call try/import blocks with **module-level availability probes** (`PHONENUMBERS_AVAILABLE`, `PROBABLEPEOPLE_AVAILABLE`) that run once at import time. If either lib is missing, an actionable `logger.error(...)` fires immediately at server startup pointing at the pip command to fix it — so the next silent-dependency regression is visible in `/tmp/bcr_server.log` instead of hiding behind empty fields. Per-card overhead drops from 18 imports per scan to 1.
+
+---
+
 ## [2.1.1] — 2026-05-25
 
 Bug-fix follow-up to 2.1.0. All three issues surfaced on `IMG_1544.heic` (6×3 Portuguese-language card layout).
