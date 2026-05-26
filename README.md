@@ -13,8 +13,8 @@ Local-first, AI-powered business card scanner. Drop in JPEG / PNG / PDF cards, g
 
 ## 🎬 Screenshots
 
-| Scanner | Results | Contacts |
-|---|---|---|
+| Scanner                                                          | Results                                                                | Contacts                                                           |
+| ---------------------------------------------------------------- | ---------------------------------------------------------------------- | ------------------------------------------------------------------ |
 | ![Scanner](business-card-reader/project/screenshots/initial.png) | ![Results](business-card-reader/project/screenshots/results-state.png) | ![Wide](business-card-reader/project/screenshots/results-wide.png) |
 
 ---
@@ -22,12 +22,15 @@ Local-first, AI-powered business card scanner. Drop in JPEG / PNG / PDF cards, g
 ## ✨ Highlights
 
 - 🧠 **State-of-the-art OCR** — defaults to **GLM-OCR** (#1 on OmniDocBench v1.5 with a 94.62 score, only 0.9 B params, runs fully local via Ollama). Optional fallback to **Qwen2.5-VL**, **llama3.2-vision**, **llava**, **Claude**, or **OpenAI**.
-- 📷 **Smart card detection** — automatic OpenCV pipeline with grid-layout fallback for contact-sheet scans, plus manual single-card and N×M-grid modes.
+- 📷 **Smart card detection** — automatic OpenCV pipeline with gap-detection + median-regularize for non-uniform grids, plus manual single-card and N×M-grid modes. Each detected tile is refined to its actual card boundary (CLAHE + multi-strategy edges + perspective-correct) before being sent to the vision model — drops the inter-card-gap pixels that confuse OCR.
+- 🎛️ **Interactive preview** — `Preview` runs detection only (no LLM), shows annotated tiles + count. In Grid mode you can drag the dashed dividers and the solid outer crop edges to reposition every line by hand; debounced auto-refresh shows the new tiling in ~350 ms. When Auto falls back to a grid, a one-click _"Apply N×M grid"_ banner offers to switch modes with the inferred dims.
+- 🧭 **Optional auto-deskew** — opt-in checkbox warps the card cluster to an axis-aligned rectangle (four-point perspective transform) before detection. Useful for phone-camera photos with perspective distortion; auto-skipped if the cluster is already orthogonal.
 - 🧾 **QR-first short-circuit** — if a card's QR encodes a vCard / MECARD with enough data, vision is skipped entirely (saves ~20-30 s per card).
-- 📤 **Multi-format export** — VCF (Outlook / iPhone Contacts), Excel, Outlook CSV, ZIP bundle of everything.
+- 📤 **Multi-format export** — Results panel buttons export the just-scanned cards directly: VCF (Outlook / iPhone Contacts), Excel, Outlook CSV, or a ZIP bundle (all three + one VCF per card).
 - 🛑 **Stop button** — cancel an in-flight scan from the UI; in-flight card finishes, no further work runs.
 - 📜 **Scan history** — every run is archived locally with original images, parsed contacts, and exports. Browse, ZIP-download, or relaunch with new settings.
-- 🏷️ **Smart name & phone parsing** — `phonenumbers` (Google libphonenumber) for international phone validation, `probablepeople` (CRF) for distinguishing "Banco do Brasil" (company) from "João da Silva" (person).
+- 🏷️ **Smart name & phone parsing** — `phonenumbers` (Google libphonenumber) for international phone validation, `probablepeople` (CRF) for distinguishing "Banco do Brasil" (company) from "João da Silva" (person). Missing deps fail loudly at startup with the exact `pip install` command, so silent regressions are impossible.
+- 🩹 **CJK→Latin repair** — defensive post-process that maps the visually-similar Chinese ideographs GLM-OCR sometimes emits in place of accented Portuguese/Spanish characters (`é→矇`, `ç→癟`, `ã→瓊`) back to their Latin originals. Applied at every contact-extraction return point (including the QR-only fast path).
 - 🔐 **100% local** — no external API calls unless you explicitly configure a cloud fallback.
 
 ---
@@ -109,30 +112,30 @@ LOCAL-FIRST provider chain: every scan tries Ollama → vLLM → Claude → Open
 
 ## 🛠️ Tech stack
 
-| Layer | Library |
-|---|---|
-| Web UI | React (single-file shell) |
-| API | FastAPI + uvicorn (REST + SSE) |
-| Computer vision | OpenCV, pyzbar, pillow-heif |
-| OCR / vision | Ollama (glm-ocr, qwen2.5vl, llama3.2-vision, llava…) |
-| Cloud fallback | Anthropic Claude, OpenAI |
-| Phone parsing | `phonenumbers` (Google libphonenumber) |
-| Name parsing | `probablepeople` (CRF) |
-| VCF generation | `vobject` |
-| Excel export | `pandas` + `openpyxl` |
-| PDF rendering | `pymupdf` |
-| Tests | `pytest`, `pytest-cov`, `pytest-timeout`, `httpx` (TestClient) |
+| Layer           | Library                                                        |
+| --------------- | -------------------------------------------------------------- |
+| Web UI          | React (single-file shell)                                      |
+| API             | FastAPI + uvicorn (REST + SSE)                                 |
+| Computer vision | OpenCV, pyzbar, pillow-heif                                    |
+| OCR / vision    | Ollama (glm-ocr, qwen2.5vl, llama3.2-vision, llava…)           |
+| Cloud fallback  | Anthropic Claude, OpenAI                                       |
+| Phone parsing   | `phonenumbers` (Google libphonenumber)                         |
+| Name parsing    | `probablepeople` (CRF)                                         |
+| VCF generation  | `vobject`                                                      |
+| Excel export    | `pandas` + `openpyxl`                                          |
+| PDF rendering   | `pymupdf`                                                      |
+| Tests           | `pytest`, `pytest-cov`, `pytest-timeout`, `httpx` (TestClient) |
 
 ---
 
 ## 🤖 Recommended models
 
-| Model | Size | Best for |
-|---|---|---|
-| **glm-ocr** ⭐ | 0.9 B | Default. Fastest, most accurate OCR for business cards. |
-| qwen2.5vl | 7 B | Strong general VLM fallback (96.4 % DocVQA, 88.8 % OCRBench). |
-| llama3.2-vision | 11 B | General vision, used historically. |
-| llava:13b | 13 B | High-accuracy fallback when GPU memory allows. |
+| Model           | Size  | Best for                                                      |
+| --------------- | ----- | ------------------------------------------------------------- |
+| **glm-ocr** ⭐  | 0.9 B | Default. Fastest, most accurate OCR for business cards.       |
+| qwen2.5vl       | 7 B   | Strong general VLM fallback (96.4 % DocVQA, 88.8 % OCRBench). |
+| llama3.2-vision | 11 B  | General vision, used historically.                            |
+| llava:13b       | 13 B  | High-accuracy fallback when GPU memory allows.                |
 
 `ollama pull <model>` installs any of them; the model dropdown in the UI auto-detects what you have and pre-selects whatever's currently loaded into GPU to avoid expensive swaps.
 
@@ -160,6 +163,7 @@ ollama serve                            # start the server
 curl http://localhost:11434/api/tags    # verify it responds
 ollama list                             # check installed models
 ```
+
 </details>
 
 <details>
@@ -171,12 +175,14 @@ ollama list                             # check installed models
 export DYLD_LIBRARY_PATH=/opt/homebrew/lib:$DYLD_LIBRARY_PATH
 python3 server.py
 ```
+
 </details>
 
 <details>
 <summary><b>Only some cards detected in a grid scan</b></summary>
 
 Switch the detection mode to **Manual — Grid Layout** in the settings panel and enter the correct rows × cols. The automatic mode falls back to a 4×2 / 2×4 grid based on aspect ratio when it can't detect cards individually, which doesn't always match real layouts.
+
 </details>
 
 <details>
@@ -202,9 +208,9 @@ Coverage targets: `server.py` 100 %, `utils/qr_reader.py` 51 %, `utils/vcf_gener
 
 ## 📤 Importing to Outlook
 
-**VCF**: File → Open & Export → Import/Export → *Import a vCard file (.vcf)*.
+**VCF**: File → Open & Export → Import/Export → _Import a vCard file (.vcf)_.
 
-**Outlook CSV**: File → Open & Export → Import/Export → *Import from another program* → **Comma Separated Values (Windows)**. If fields don't auto-map, use **Map Custom Fields**. Try the **Simplified Format** toggle in the export options if your Outlook version chokes on certain field-name variants.
+**Outlook CSV**: File → Open & Export → Import/Export → _Import from another program_ → **Comma Separated Values (Windows)**. If fields don't auto-map, use **Map Custom Fields**. Try the **Simplified Format** toggle in the export options if your Outlook version chokes on certain field-name variants.
 
 ---
 
