@@ -2,6 +2,25 @@
 
 All notable changes to the Business Card Scanner project will be documented in this file.
 
+## [2.1.1] — 2026-05-25
+
+Bug-fix follow-up to 2.1.0. All three issues surfaced on `IMG_1544.heic` (6×3 Portuguese-language card layout).
+
+### Fixed
+
+- **Empty `fullName` on every extracted card.** Root cause: the vision LLM returns camelCase keys (`firstName`, `lastName`, `fullName`) via `ContactInfo.to_legacy_dict()`, but the server's frontend-mapper in `_contact_data_to_frontend` and `_contact_to_api` was reading **snake_case** (`full_name`) and never falling back to `firstName + lastName` concatenation. Title/company/email survived because they're single-word keys. Mapper now tries (in order): `fullName`, `full_name`, `firstName + lastName`, `first_name + last_name`, `name`. Applied to all three sites in `server.py`.
+- **CJK-character contamination in Portuguese text.** GLM-OCR (Chinese-origin model) was substituting accented Latin characters with visually-vaguely-similar CJK ideographs: `é → 矇` (U+77C7), `ç → 癟` (U+765F), `ã → 瓊` (U+74CA). Three-pronged fix:
+  1. Added explicit prompt rule in `utils/providers/base.py`: _"Use ONLY Latin characters with proper Western European accents. NEVER substitute non-Latin characters (Chinese, Japanese, Korean, etc.) for accented Latin letters."_
+  2. New `repair_cjk_substitutions()` post-processor with a confirmed-substitution table (`_CJK_TO_LATIN`) and a CJK-range regex (`_CJK_RE`). Unknown CJK chars in Latin-context fields fall through to `?` so corruption is visible rather than silent.
+  3. Applied at **three sites** (the QR-only short-circuit at `extract_contact:185` was the gotcha — it bypasses every vision provider, so the base-class repair never ran for QR-sufficient cards): `card_processor.extract_contact` (both return points) + `providers.base._make_scan_result`. All paths through `extract_contact` now repair before returning.
+
+### Added
+
+- **`POST /api/scan/export/{fmt}`** — exports the just-completed scan's cards directly, separate from the persistent contacts repository. Supports `vcf` (concatenated, uses pre-generated `vcfContent`), `xlsx`, `csv` (Outlook format), and `zip` (bundles all three + per-card individual VCFs under `per_card/`).
+- Wired up every export button in the Results panel — they were UI-only placeholders before. **Export All** and **Download ZIP** hit `/api/scan/export/zip`; the **VCF / Excel / Outlook CSV** pills hit their respective formats. Each button shows a spinner while in-flight and disables when no cards or another export is running. Errors surface via `alert()`. The **+ Outlook Push** button is visibly disabled with `(soon)` and a tooltip — MS Graph integration is not yet wired.
+
+---
+
 ## [2.1.0] — 2026-05-25
 
 Detection & extraction overhaul aimed at photographed multi-card images (phone-camera shots, not just flatbed scans). Auto mode now reliably extracts every card in a 6×3 layout where it previously got 7/18.

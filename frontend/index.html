@@ -3221,10 +3221,11 @@
       }
 
       // ─── Results Panel ────────────────────────────────────────────────────────────
-      function ResultsPanel({ cards, onToggleLock, onSave, onEdit }) {
+      function ResultsPanel({ cards, runId, onToggleLock, onSave, onEdit }) {
         const [view, setView] = useState("grid");
         const [selectedIds, setSelectedIds] = useState(new Set());
         const [bulkSaved, setBulkSaved] = useState(false);
+        const [busyFmt, setBusyFmt] = useState(null); // which export is in-flight
 
         const toggleSelect = (id) => {
           setSelectedIds((prev) => {
@@ -3235,9 +3236,47 @@
           });
         };
 
+        // Hit POST /api/scan/export/{fmt} with the current cards, then
+        // trigger a browser download from the response blob.
+        const downloadExport = async (fmt, fallbackFilename) => {
+          if (!cards.length || busyFmt) return;
+          setBusyFmt(fmt);
+          try {
+            const r = await fetch(`/api/scan/export/${fmt}`, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ cards }),
+            });
+            if (!r.ok) {
+              const detail = await r.text();
+              throw new Error(detail || `HTTP ${r.status}`);
+            }
+            const blob = await r.blob();
+            // Filename: prefer server's Content-Disposition, else fallback
+            const cd = r.headers.get("Content-Disposition") || "";
+            const m = cd.match(/filename="([^"]+)"/);
+            const filename = m ? m[1] : fallbackFilename;
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement("a");
+            a.href = url;
+            a.download = filename;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
+          } catch (err) {
+            console.error(`[export ${fmt}] failed:`, err);
+            alert(`Export failed: ${err.message || err}`);
+          } finally {
+            setBusyFmt(null);
+          }
+        };
+
         const handleBulkDownload = () => {
-          setBulkSaved(true);
-          setTimeout(() => setBulkSaved(false), 2500);
+          downloadExport("zip", "scan_results.zip").then(() => {
+            setBulkSaved(true);
+            setTimeout(() => setBulkSaved(false), 2500);
+          });
         };
 
         return (
@@ -3301,16 +3340,27 @@
                 ))}
               </div>
 
-              <Btn size="sm" icon={Icons.download} variant="secondary">
-                Export All
+              <Btn
+                size="sm"
+                icon={Icons.download}
+                variant="secondary"
+                onClick={() => downloadExport("zip", "scan_results.zip")}
+                disabled={!cards.length || !!busyFmt}
+              >
+                {busyFmt === "zip" ? "Building…" : "Export All"}
               </Btn>
               <Btn
                 size="sm"
                 icon={bulkSaved ? Icons.check : Icons.download}
                 variant={bulkSaved ? "success" : "primary"}
                 onClick={handleBulkDownload}
+                disabled={!cards.length || !!busyFmt}
               >
-                {bulkSaved ? "Done!" : "Download ZIP"}
+                {bulkSaved
+                  ? "Done!"
+                  : busyFmt === "zip"
+                    ? "Building…"
+                    : "Download ZIP"}
               </Btn>
             </div>
 
@@ -3323,9 +3373,15 @@
                 flexShrink: 0,
               }}
             >
-              {["VCF", "Excel", "Outlook CSV"].map((fmt) => (
+              {[
+                ["VCF", "vcf", "scan_contacts.vcf"],
+                ["Excel", "xlsx", "scan_contacts.xlsx"],
+                ["Outlook CSV", "csv", "scan_contacts_outlook.csv"],
+              ].map(([label, fmt, fname]) => (
                 <button
                   key={fmt}
+                  onClick={() => downloadExport(fmt, fname)}
+                  disabled={!cards.length || !!busyFmt}
                   style={{
                     padding: "4px 10px",
                     borderRadius: 99,
@@ -3334,18 +3390,30 @@
                     border: "1px solid var(--border)",
                     background: "var(--surface)",
                     color: "var(--text-secondary)",
-                    cursor: "pointer",
+                    cursor:
+                      !cards.length || busyFmt ? "not-allowed" : "pointer",
+                    opacity: !cards.length || busyFmt ? 0.5 : 1,
                     fontFamily: "inherit",
                     display: "flex",
                     alignItems: "center",
                     gap: 5,
                   }}
                 >
-                  <Icons.download color="currentColor" width={10} height={10} />
-                  {fmt}
+                  {busyFmt === fmt ? (
+                    <Spinner size={10} />
+                  ) : (
+                    <Icons.download
+                      color="currentColor"
+                      width={10}
+                      height={10}
+                    />
+                  )}
+                  {label}
                 </button>
               ))}
               <button
+                disabled
+                title="Microsoft Graph integration not yet wired up — coming soon"
                 style={{
                   padding: "4px 10px",
                   borderRadius: 99,
@@ -3354,11 +3422,12 @@
                   border: "1px solid var(--border)",
                   background: "var(--bg)",
                   color: "var(--text-tertiary)",
-                  cursor: "pointer",
+                  cursor: "not-allowed",
+                  opacity: 0.6,
                   fontFamily: "inherit",
                 }}
               >
-                + Outlook Push
+                + Outlook Push (soon)
               </button>
             </div>
 
@@ -3415,6 +3484,7 @@
         const timerRef = useRef(null);
         const abortRef = useRef(null);
         const [cards, setCards] = useState([]);
+        const [runId, setRunId] = useState(null);
         const [errorMsg, setErrorMsg] = useState("");
         const [warnings, setWarnings] = useState([]);
         const [previewData, setPreviewData] = useState(null); // {previews:[{filename,cardCount,imageDataUrl}], totalCards}
@@ -3626,6 +3696,7 @@
                   if (evt.stage === "done") {
                     clearInterval(timerRef.current);
                     setCards(evt.cards || []);
+                    setRunId(evt.runId || null);
                     setPhase("results");
                     return;
                   }
@@ -4635,6 +4706,7 @@
 
                   <ResultsPanel
                     cards={cards}
+                    runId={runId}
                     onToggleLock={handleToggleLock}
                     onEdit={onEditCard}
                   />

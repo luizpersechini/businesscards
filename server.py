@@ -392,7 +392,17 @@ def _contact_data_to_frontend(
         "time": round(processing_time, 1),
         "thumbnail": has_thumbnail,
         "contact": {
-            "fullName": cd.get("full_name") or cd.get("name", ""),
+            "fullName": (
+                cd.get("fullName")
+                or cd.get("full_name")
+                or " ".join(
+                    p for p in [cd.get("firstName", ""), cd.get("lastName", "")] if p
+                ).strip()
+                or " ".join(
+                    p for p in [cd.get("first_name", ""), cd.get("last_name", "")] if p
+                ).strip()
+                or cd.get("name", "")
+            ),
             "title": cd.get("title", ""),
             "company": cd.get("company", ""),
             "email": cd.get("email", ""),
@@ -1457,7 +1467,17 @@ def _contact_to_api(entry: dict) -> dict:
         "vcf": True,
         "thumbnail": has_thumbnail,
         "contact": {
-            "fullName": cd.get("full_name") or cd.get("name", ""),
+            "fullName": (
+                cd.get("fullName")
+                or cd.get("full_name")
+                or " ".join(
+                    p for p in [cd.get("firstName", ""), cd.get("lastName", "")] if p
+                ).strip()
+                or " ".join(
+                    p for p in [cd.get("first_name", ""), cd.get("last_name", "")] if p
+                ).strip()
+                or cd.get("name", "")
+            ),
             "title": cd.get("title", ""),
             "company": cd.get("company", ""),
             "email": cd.get("email", ""),
@@ -1595,6 +1615,128 @@ async def export_contacts_csv():
     )
 
 
+# ─── Export just-scanned cards (Results panel) ─────────────────────────
+# Frontend POSTs the cards array from the most recent scan; we return
+# the file as a streaming download. This is separate from the contacts
+# repository exports so the user can export *this run's* output without
+# committing it to the persistent repo.
+
+from fastapi import Body
+from pydantic import BaseModel as _BaseModel
+
+
+class _ScanCard(_BaseModel):
+    fullName: Optional[str] = ""
+    title: Optional[str] = ""
+    company: Optional[str] = ""
+    email: Optional[str] = ""
+    phone: Optional[str] = ""
+    mobile: Optional[str] = ""
+    website: Optional[str] = ""
+    linkedin: Optional[str] = ""
+    address: Optional[str] = ""
+
+
+class _ScanExportBody(_BaseModel):
+    cards: List[dict]  # each item has at least {contact: {...}, vcfContent?: str, filename?: str}
+
+
+def _frontend_card_to_legacy_dict(card: dict) -> dict:
+    """Convert a frontend card (nested .contact shape) to the flat dict
+    that ExportProcessor and VCFGenerator expect."""
+    c = card.get("contact") or {}
+    # Map fullName → full_name, etc.
+    return {
+        "full_name": c.get("fullName", ""),
+        "title": c.get("title", ""),
+        "company": c.get("company", ""),
+        "email": c.get("email", ""),
+        "phone": c.get("phone", ""),
+        "mobile": c.get("mobile", ""),
+        "website": c.get("website", ""),
+        "linkedin": c.get("linkedin", ""),
+        "address": c.get("address", ""),
+    }
+
+
+@app.post("/api/scan/export/{fmt}")
+async def export_scan(fmt: str, body: _ScanExportBody):
+    fmt = fmt.lower()
+    if not body.cards:
+        raise HTTPException(status_code=400, detail="No cards to export")
+
+    if fmt == "vcf":
+        # Prefer the cached vcfContent (already generated during scan), else
+        # regenerate from the contact dict.
+        from utils.vcf_generator import VCFGenerator
+
+        gen = VCFGenerator()
+        parts = []
+        for card in body.cards:
+            vcf = card.get("vcfContent")
+            if not vcf:
+                vcf = gen.generate_vcf_string(_frontend_card_to_legacy_dict(card))
+            parts.append(vcf)
+        payload = "\r\n".join(parts).encode("utf-8")
+        return StreamingResponse(
+            io.BytesIO(payload),
+            media_type="text/vcard",
+            headers={"Content-Disposition": 'attachment; filename="scan_contacts.vcf"'},
+        )
+
+    legacy = [_frontend_card_to_legacy_dict(c) for c in body.cards]
+
+    if fmt in ("xlsx", "excel"):
+        xlsx_bytes = _exporter.export_to_excel(legacy)
+        return StreamingResponse(
+            io.BytesIO(xlsx_bytes),
+            media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            headers={"Content-Disposition": 'attachment; filename="scan_contacts.xlsx"'},
+        )
+
+    if fmt == "csv":
+        csv_bytes = _exporter.export_to_outlook_csv(legacy)
+        return StreamingResponse(
+            io.BytesIO(csv_bytes),
+            media_type="text/csv",
+            headers={"Content-Disposition": 'attachment; filename="scan_contacts_outlook.csv"'},
+        )
+
+    if fmt == "zip":
+        # Build a ZIP containing all three formats + per-card VCFs
+        import zipfile
+        from utils.vcf_generator import VCFGenerator
+
+        gen = VCFGenerator()
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+            # Combined VCF
+            combined_vcf = "\r\n".join(
+                card.get("vcfContent")
+                or gen.generate_vcf_string(_frontend_card_to_legacy_dict(card))
+                for card in body.cards
+            )
+            zf.writestr("contacts.vcf", combined_vcf)
+            zf.writestr("contacts.xlsx", _exporter.export_to_excel(legacy))
+            zf.writestr("contacts_outlook.csv", _exporter.export_to_outlook_csv(legacy))
+            # Per-card individual VCFs
+            for i, card in enumerate(body.cards):
+                vcf = card.get("vcfContent") or gen.generate_vcf_string(
+                    _frontend_card_to_legacy_dict(card)
+                )
+                fname = (card.get("filename") or f"card_{i + 1}").replace("/", "_")
+                if not fname.endswith(".vcf"):
+                    fname += ".vcf"
+                zf.writestr(f"per_card/{fname}", vcf)
+        return StreamingResponse(
+            io.BytesIO(buf.getvalue()),
+            media_type="application/zip",
+            headers={"Content-Disposition": 'attachment; filename="scan_results.zip"'},
+        )
+
+    raise HTTPException(status_code=400, detail=f"Unknown format: {fmt}")
+
+
 # ═══════════════════════════════════════════════════════════
 # HISTORY
 # ═══════════════════════════════════════════════════════════
@@ -1609,7 +1751,17 @@ def _run_to_api(entry) -> dict:
         cards_out.append(
             {
                 "contact": {
-                    "fullName": cd.get("full_name") or cd.get("name", ""),
+                    "fullName": (
+                        cd.get("fullName")
+                        or cd.get("full_name")
+                        or " ".join(
+                            p for p in [cd.get("firstName", ""), cd.get("lastName", "")] if p
+                        ).strip()
+                        or " ".join(
+                            p for p in [cd.get("first_name", ""), cd.get("last_name", "")] if p
+                        ).strip()
+                        or cd.get("name", "")
+                    ),
                     "company": cd.get("company", ""),
                     "email": cd.get("email", ""),
                     "phone": cd.get("phone", ""),
