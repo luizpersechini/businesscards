@@ -182,10 +182,28 @@ def _load_image(raw: bytes, filename: str):
         except ImportError:
             raise ValueError("PDF support requires PyMuPDF (pip install pymupdf)")
     else:
+        # Try cv2 first (fast path for JPG/PNG); fall back to Pillow for
+        # HEIC/HEIF/WEBP and anything else cv2 can't decode.
         arr = np.frombuffer(raw, dtype=np.uint8)
         bgr = cv2.imdecode(arr, cv2.IMREAD_COLOR)
         if bgr is None:
-            raise ValueError(f"Could not decode image: {filename}")
+            try:
+                # Register HEIF/HEIC opener if available (no-op if already registered)
+                try:
+                    from pillow_heif import register_heif_opener
+
+                    register_heif_opener()
+                except ImportError:
+                    pass
+                pil_img = Image.open(io.BytesIO(raw))
+                # Drop alpha; convert to RGB
+                if pil_img.mode != "RGB":
+                    pil_img = pil_img.convert("RGB")
+                rgb = np.array(pil_img)
+                bgr = cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR)
+                return bgr, rgb
+            except Exception as pil_err:
+                raise ValueError(f"Could not decode image: {filename} ({pil_err})")
         rgb = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
         return bgr, rgb
 
@@ -229,6 +247,70 @@ def _pdf_to_images(
 
     doc.close()
     return pages
+
+
+def _deskew_to_card_cluster(bgr: np.ndarray, min_area_ratio: float = 0.25) -> np.ndarray:
+    """
+    For photographed images of multiple cards on a table:
+    find the convex region containing all cards, then warp it to an
+    axis-aligned rectangle that fills the frame. Returns the original
+    image unchanged if no clear card cluster is found or the cluster
+    is small / already axis-aligned.
+
+    Strategy:
+      1. Edge map (Canny) of a downsampled copy for speed
+      2. Heavy dilation/close to merge per-card edges into one blob
+      3. Largest external contour = card cluster
+      4. minAreaRect → 4 corners → four_point_transform
+    """
+    from utils.improved_card_detector import ImprovedCardDetector
+
+    h, w = bgr.shape[:2]
+    # Downsample for the search (≤1000 px on long edge)
+    scale = min(1.0, 1000.0 / max(h, w))
+    small = cv2.resize(bgr, None, fx=scale, fy=scale, interpolation=cv2.INTER_AREA)
+    gray = cv2.cvtColor(small, cv2.COLOR_BGR2GRAY)
+    gray = cv2.GaussianBlur(gray, (5, 5), 0)
+    edges = cv2.Canny(gray, 50, 150)
+    # Merge per-card edges into one large blob covering the whole grid
+    kx = max(15, small.shape[1] // 40)
+    ky = max(15, small.shape[0] // 40)
+    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (kx, ky))
+    closed = cv2.morphologyEx(edges, cv2.MORPH_CLOSE, kernel, iterations=2)
+    closed = cv2.dilate(closed, kernel, iterations=1)
+    contours, _ = cv2.findContours(closed, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    if not contours:
+        return bgr
+    largest = max(contours, key=cv2.contourArea)
+    area_ratio = cv2.contourArea(largest) / (small.shape[0] * small.shape[1])
+    if area_ratio < min_area_ratio:
+        return bgr  # not a confident cluster
+    rect = cv2.minAreaRect(largest)
+    # Skip if the cluster is already axis-aligned (no work to do)
+    angle = rect[-1]
+    angle_dev = min(abs(angle), abs(90 - abs(angle)))
+    bbox_w, bbox_h = rect[1]
+    if bbox_w < 5 or bbox_h < 5:
+        return bgr
+    aabb_w = max(bbox_w, bbox_h) * (1.0)  # axis-aligned bounding box would be similar
+    # Compute pixel waste vs an axis-aligned bbox of the same contour
+    x, y, bw, bh = cv2.boundingRect(largest)
+    aabb_area = bw * bh
+    rot_area = bbox_w * bbox_h
+    if angle_dev < 1.5 and rot_area > 0.95 * aabb_area:
+        return bgr  # negligible rotation
+    box = cv2.boxPoints(rect)
+    # Scale corners back up to original image coordinates
+    box = box / scale
+    detector = ImprovedCardDetector()
+    try:
+        deskewed = detector.four_point_transform(bgr, box)
+    except Exception:
+        return bgr
+    # Sanity: deskewed must be non-trivial
+    if deskewed is None or deskewed.size == 0:
+        return bgr
+    return deskewed
 
 
 def _create_thumbnail(
@@ -324,6 +406,286 @@ def _contact_data_to_frontend(
     }
 
 
+def _refine_tile_to_card(tile_bgr: np.ndarray) -> np.ndarray:
+    """
+    A grid tile typically contains a single card plus some surrounding
+    table/gap pixels (because the grid lines fall in inter-card gutters,
+    not on card edges). Find the actual card boundary inside the tile and
+    crop+deskew to it. Returns the tile unchanged if no clear card boundary
+    is found, so this is always safe to call.
+
+    Algorithm:
+      1. Multi-strategy edge detection (Canny low/high + adaptive threshold)
+      2. Pick the largest 4–8-corner contour whose area is 25–98% of the tile
+      3. If it's a quadrilateral, four-point-warp to deskew
+      4. Otherwise crop to its bounding rect (with a small inset)
+    """
+    from utils.improved_card_detector import ImprovedCardDetector
+
+    h, w = tile_bgr.shape[:2]
+    if h < 100 or w < 100:
+        return tile_bgr
+    gray = cv2.cvtColor(tile_bgr, cv2.COLOR_BGR2GRAY)
+    # CLAHE to boost contrast on washed-out / mostly-white cards
+    clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+    eq = clahe.apply(gray)
+    blurred = cv2.GaussianBlur(eq, (5, 5), 0)
+
+    edge_maps = [
+        cv2.Canny(blurred, 30, 100),
+        cv2.Canny(blurred, 60, 150),
+        cv2.adaptiveThreshold(
+            blurred,
+            255,
+            cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+            cv2.THRESH_BINARY_INV,
+            15,
+            4,
+        ),
+    ]
+    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (7, 7))
+    tile_area = h * w
+    best = None
+    best_score = 0
+    for em in edge_maps:
+        closed = cv2.morphologyEx(em, cv2.MORPH_CLOSE, kernel)
+        contours, _ = cv2.findContours(closed, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        for c in contours:
+            area = cv2.contourArea(c)
+            if area < 0.25 * tile_area or area > 0.98 * tile_area:
+                continue
+            peri = cv2.arcLength(c, True)
+            approx = cv2.approxPolyDP(c, 0.02 * peri, True)
+            n = len(approx)
+            if n < 4 or n > 8:
+                continue
+            # Score: area * (1 if quadrilateral) * (1 - distance from card-like aspect)
+            x, y, bw, bh = cv2.boundingRect(c)
+            if bw == 0 or bh == 0:
+                continue
+            aspect = bw / bh
+            # Business cards: aspect ~1.6–1.8 (or 0.55–0.625 if portrait)
+            aspect_score = 0
+            for target in (1.7, 1 / 1.7):
+                aspect_score = max(aspect_score, 1.0 - min(1.0, abs(aspect - target) / target))
+            quad_bonus = 1.5 if n == 4 else 1.0
+            score = area * quad_bonus * (0.5 + 0.5 * aspect_score)
+            if score > best_score:
+                best_score = score
+                best = (n, approx, c)
+
+    if best is None:
+        return tile_bgr
+
+    n, approx, contour = best
+    detector = ImprovedCardDetector()
+    if n == 4:
+        try:
+            return detector.four_point_transform(tile_bgr, approx.reshape(4, 2))
+        except Exception:
+            pass
+    # Fallback: tight bounding rect with small inset
+    x, y, bw, bh = cv2.boundingRect(contour)
+    pad = 2
+    return tile_bgr[
+        max(0, y - pad) : y + bh + pad,
+        max(0, x - pad) : x + bw + pad,
+    ]
+
+
+def _process_custom_tiles(
+    processor,
+    image_bgr,
+    image_rgb,
+    h_lines,
+    v_lines,
+    top,
+    bottom,
+    left,
+    right,
+    vision_model,
+    vision_timeout,
+    cancel_check,
+):
+    """Crop image into tiles using normalized line positions, then run
+    process_single_card on each tile. Returns a list of card dicts."""
+    h, w = image_bgr.shape[:2]
+    rects = _grid_rects_from_lines(w, h, h_lines, v_lines, top, bottom, left, right)
+    results = []
+    for x, y, bw, bh in rects:
+        if cancel_check():
+            break
+        tile_bgr_raw = image_bgr[y : y + bh, x : x + bw]
+        # Refine: find the actual card inside the tile (trims gap/background)
+        tile_bgr = _refine_tile_to_card(tile_bgr_raw)
+        # rgb mirrors whatever bgr ended up as (refined or raw)
+        tile_rgb = cv2.cvtColor(tile_bgr, cv2.COLOR_BGR2RGB)
+        card = processor.process_single_card(
+            tile_bgr, tile_rgb, vision_model=vision_model, vision_timeout=vision_timeout
+        )
+        if card:
+            results.append(card)
+    return results
+
+
+def _gap_detect_and_regularize(bgr: np.ndarray) -> list:
+    """
+    Replicates the preview's gap-based grid inference + regularization
+    (drop tiny outer bands, split oversized bands using inner gap detection).
+    Returns a list of (x, y, w, h) tile rectangles tiling the whole image.
+    """
+    from utils.improved_card_detector import ImprovedCardDetector
+
+    h, w = bgr.shape[:2]
+    gray = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
+    edges = cv2.Canny(gray, 50, 150)
+    h_proj = np.sum(edges, axis=1).astype(float)
+    v_proj = np.sum(edges, axis=0).astype(float)
+    h_smooth = np.convolve(h_proj, np.ones(3) / 3, mode="same")
+    v_smooth = np.convolve(v_proj, np.ones(3) / 3, mode="same")
+    d = ImprovedCardDetector()
+    row_splits = d._find_gap_positions(h_smooth, h, cross_length=w)
+    col_splits = d._find_gap_positions(v_smooth, w, cross_length=h)
+    if not (row_splits or col_splits):
+        return []
+    row_bounds = [0] + row_splits + [h]
+    col_bounds = [0] + col_splits + [w]
+
+    def find_inner_gaps(slice_bgr, axis, expected_count):
+        if expected_count < 1:
+            return []
+        g = cv2.cvtColor(slice_bgr, cv2.COLOR_BGR2GRAY)
+        e = cv2.Canny(g, 50, 150)
+        if axis == "row":
+            proj = np.sum(e, axis=1).astype(float)
+            length = slice_bgr.shape[0]
+            cross = slice_bgr.shape[1]
+        else:
+            proj = np.sum(e, axis=0).astype(float)
+            length = slice_bgr.shape[1]
+            cross = slice_bgr.shape[0]
+        sm = np.convolve(proj, np.ones(3) / 3, mode="same")
+        d2 = ImprovedCardDetector()
+        splits = d2._find_gap_positions(sm, length, cross_length=cross)
+        if len(splits) >= expected_count:
+            scored = sorted(splits, key=lambda p: sm[max(0, min(len(sm) - 1, p))])
+            return sorted(scored[:expected_count])
+        return splits
+
+    def regularize(bounds, axis):
+        if len(bounds) < 3:
+            return bounds
+        spans = [bounds[i + 1] - bounds[i] for i in range(len(bounds) - 1)]
+        median = sorted(spans)[len(spans) // 2]
+        if spans[0] < 0.5 * median:
+            bounds = bounds[1:]
+            spans = [bounds[i + 1] - bounds[i] for i in range(len(bounds) - 1)]
+        if spans and spans[-1] < 0.5 * median:
+            bounds = bounds[:-1]
+            spans = [bounds[i + 1] - bounds[i] for i in range(len(bounds) - 1)]
+        bounds[0] = 0
+        out = [bounds[0]]
+        for i in range(len(bounds) - 1):
+            a, b = bounds[i], bounds[i + 1]
+            span = b - a
+            n_sub = max(1, int(round(span / median)))
+            if n_sub > 1:
+                sl = bgr[a:b] if axis == "row" else bgr[:, a:b]
+                inner = find_inner_gaps(sl, axis, n_sub - 1)
+                if len(inner) == n_sub - 1:
+                    for s in inner:
+                        out.append(a + s)
+                else:
+                    for k in range(1, n_sub):
+                        out.append(a + int(round(k * span / n_sub)))
+            out.append(b)
+        return out
+
+    row_bounds = regularize(row_bounds, "row")
+    col_bounds = regularize(col_bounds, "col")
+    row_bounds[0] = 0
+    row_bounds[-1] = h
+    col_bounds[0] = 0
+    col_bounds[-1] = w
+    rects = []
+    for r in range(len(row_bounds) - 1):
+        for c in range(len(col_bounds) - 1):
+            y1, y2 = row_bounds[r], row_bounds[r + 1]
+            x1, x2 = col_bounds[c], col_bounds[c + 1]
+            if y2 - y1 < 80 or x2 - x1 < 80:
+                continue
+            rects.append((x1, y1, x2 - x1, y2 - y1))
+    return rects
+
+
+def _process_with_refinement(
+    processor,
+    image_bgr,
+    image_rgb,
+    detection_mode,
+    vision_model,
+    vision_timeout,
+    grid_rows,
+    grid_cols,
+    cancel_check,
+):
+    """
+    Auto/single-mode equivalent of process_batch, but:
+      - When the detector returns 4-corner contours, use them as-is
+        (already deskewed via four_point_transform).
+      - When the detector returns rectangular tiles (contour=None) AND
+        very few of them, override with our own gap-detection +
+        regularization, which catches missed gaps and rejects margins.
+      - Always refine each rect tile to its actual card boundary before
+        passing to the vision model (trims inter-card gap pixels).
+    """
+    detected = processor.detect_cards(image_bgr, detection_mode, grid_rows, grid_cols, 0, 0, 0, 0)
+    contour_polys = [c for _, c in detected if c is not None]
+
+    # Decide which set of tile rectangles to process
+    use_overlay_grid = False
+    overlay_rects = []
+    if not contour_polys and detection_mode == "Automatic":
+        # Detector fell back to rectangular tiles. Run our own gap +
+        # regularize pass to catch any missed rows/cols.
+        overlay_rects = _gap_detect_and_regularize(image_bgr)
+        if len(overlay_rects) > len(detected):
+            use_overlay_grid = True
+
+    results = []
+    if use_overlay_grid:
+        for x, y, bw, bh in overlay_rects:
+            if cancel_check and cancel_check():
+                break
+            tile_bgr = image_bgr[y : y + bh, x : x + bw]
+            tile_bgr = _refine_tile_to_card(tile_bgr)
+            tile_rgb = cv2.cvtColor(tile_bgr, cv2.COLOR_BGR2RGB)
+            card = processor.process_single_card(
+                tile_bgr,
+                tile_rgb,
+                vision_model=vision_model,
+                vision_timeout=vision_timeout,
+            )
+            if card:
+                results.append(card)
+    else:
+        for card_image_bgr, contour in detected:
+            if cancel_check and cancel_check():
+                break
+            if contour is None:
+                card_image_bgr = _refine_tile_to_card(card_image_bgr)
+            card_rgb = cv2.cvtColor(card_image_bgr, cv2.COLOR_BGR2RGB)
+            card = processor.process_single_card(
+                card_image_bgr,
+                card_rgb,
+                vision_model=vision_model,
+                vision_timeout=vision_timeout,
+            )
+            if card:
+                results.append(card)
+    return results
+
+
 async def _scan_generator(
     files: List[UploadFile],
     model: str,
@@ -331,6 +693,13 @@ async def _scan_generator(
     rows: int,
     cols: int,
     timeout: int,
+    row_lines: str = "",
+    col_lines: str = "",
+    margin_top: float = 0.0,
+    margin_bottom: float = 1.0,
+    margin_left: float = 0.0,
+    margin_right: float = 1.0,
+    deskew: bool = False,
 ):
     """Async generator that yields SSE events for the scan pipeline."""
     # Reset the cancel flag for this scan
@@ -345,6 +714,24 @@ async def _scan_generator(
     # Map frontend mode strings to CardProcessor detection_mode
     mode_map = {"auto": "Automatic", "single": "Single Card", "grid": "Manual - Grid Layout"}
     detection_mode = mode_map.get(mode, "Automatic")
+
+    # Parse custom grid line positions. When set and mode==grid, we crop tiles
+    # ourselves and bypass the detector.
+    h_lines = _parse_line_positions(row_lines)
+    v_lines = _parse_line_positions(col_lines)
+    cropped = (
+        margin_top > 0.001 or margin_bottom < 0.999 or margin_left > 0.001 or margin_right < 0.999
+    )
+    use_custom_tiles = mode == "grid" and (h_lines or v_lines or cropped)
+    if mode == "grid" and not (h_lines or v_lines):
+        # Fill in equally-spaced defaults within the (possibly cropped) outer box
+        h_lines = [
+            margin_top + (i + 1) * (margin_bottom - margin_top) / rows for i in range(rows - 1)
+        ]
+        v_lines = [
+            margin_left + (i + 1) * (margin_right - margin_left) / cols for i in range(cols - 1)
+        ]
+        use_custom_tiles = True
 
     all_cards = []
     total_files = len(files)
@@ -407,6 +794,9 @@ async def _scan_generator(
                     if cancel_check():
                         yield _sse({"stage": "stopped", "message": "Scan cancelled by user"})
                         return
+                    if deskew:
+                        bgr = _deskew_to_card_cluster(bgr)
+                        rgb = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
                     yield _sse(
                         {
                             "stage": "extract",
@@ -418,19 +808,39 @@ async def _scan_generator(
 
                     # Process this page
                     loop = asyncio.get_event_loop()
-                    page_cards = await loop.run_in_executor(
-                        None,
-                        lambda b=bgr, r=rgb: processor.process_batch(
-                            image_bgr=b,
-                            image_rgb=r,
-                            detection_mode=detection_mode,
-                            vision_model=model,
-                            vision_timeout=timeout,
-                            grid_rows=rows,
-                            grid_cols=cols,
-                            cancel_check=cancel_check,
-                        ),
-                    )
+                    if use_custom_tiles:
+                        page_cards = await loop.run_in_executor(
+                            None,
+                            lambda b=bgr, r=rgb: _process_custom_tiles(
+                                processor,
+                                b,
+                                r,
+                                h_lines,
+                                v_lines,
+                                margin_top,
+                                margin_bottom,
+                                margin_left,
+                                margin_right,
+                                vision_model=model,
+                                vision_timeout=timeout,
+                                cancel_check=cancel_check,
+                            ),
+                        )
+                    else:
+                        page_cards = await loop.run_in_executor(
+                            None,
+                            lambda b=bgr, r=rgb: _process_with_refinement(
+                                processor,
+                                b,
+                                r,
+                                detection_mode,
+                                vision_model=model,
+                                vision_timeout=timeout,
+                                grid_rows=rows,
+                                grid_cols=cols,
+                                cancel_check=cancel_check,
+                            ),
+                        )
 
                     for card in page_cards:
                         card["_source_file"] = f"{filename} (page {page_idx + 1})"
@@ -456,6 +866,10 @@ async def _scan_generator(
                     yield _sse({"stage": "error", "message": str(e)})
                     return
 
+                if deskew:
+                    bgr = _deskew_to_card_cluster(bgr)
+                    rgb = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
+
                 yield _sse(
                     {
                         "stage": "extract",
@@ -467,19 +881,39 @@ async def _scan_generator(
 
                 # Run synchronously in executor to avoid blocking event loop
                 loop = asyncio.get_event_loop()
-                cards = await loop.run_in_executor(
-                    None,
-                    lambda b=bgr, r=rgb: processor.process_batch(
-                        image_bgr=b,
-                        image_rgb=r,
-                        detection_mode=detection_mode,
-                        vision_model=model,
-                        vision_timeout=timeout,
-                        grid_rows=rows,
-                        grid_cols=cols,
-                        cancel_check=cancel_check,
-                    ),
-                )
+                if use_custom_tiles:
+                    cards = await loop.run_in_executor(
+                        None,
+                        lambda b=bgr, r=rgb: _process_custom_tiles(
+                            processor,
+                            b,
+                            r,
+                            h_lines,
+                            v_lines,
+                            margin_top,
+                            margin_bottom,
+                            margin_left,
+                            margin_right,
+                            vision_model=model,
+                            vision_timeout=timeout,
+                            cancel_check=cancel_check,
+                        ),
+                    )
+                else:
+                    cards = await loop.run_in_executor(
+                        None,
+                        lambda b=bgr, r=rgb: _process_with_refinement(
+                            processor,
+                            b,
+                            r,
+                            detection_mode,
+                            vision_model=model,
+                            vision_timeout=timeout,
+                            grid_rows=rows,
+                            grid_cols=cols,
+                            cancel_check=cancel_check,
+                        ),
+                    )
 
                 for card in cards:
                     card["_source_file"] = filename
@@ -567,6 +1001,381 @@ async def _scan_generator(
         yield _sse({"stage": "error", "message": str(exc)})
 
 
+def _parse_line_positions(s: str) -> list:
+    """Parse comma-separated float positions in [0,1], return sorted unique list."""
+    if not s:
+        return []
+    out = []
+    for part in s.split(","):
+        try:
+            v = float(part.strip())
+            if 0.0 < v < 1.0:
+                out.append(v)
+        except ValueError:
+            continue
+    return sorted(set(out))
+
+
+def _grid_rects_from_lines(
+    w: int,
+    h: int,
+    h_fracs: list,
+    v_fracs: list,
+    top: float = 0.0,
+    bottom: float = 1.0,
+    left: float = 0.0,
+    right: float = 1.0,
+) -> list:
+    """Build tile rectangles from normalized internal line positions.
+    h_fracs are horizontal-line y-positions (row dividers), v_fracs are
+    vertical-line x-positions (col dividers). The outer crop box is defined
+    by top/bottom/left/right (all 0..1). Returns list of (x, y, w, h)."""
+    # Clamp + order outer bounds defensively
+    top = max(0.0, min(1.0, top))
+    bottom = max(0.0, min(1.0, bottom))
+    left = max(0.0, min(1.0, left))
+    right = max(0.0, min(1.0, right))
+    if bottom <= top:
+        bottom = min(1.0, top + 0.01)
+    if right <= left:
+        right = min(1.0, left + 0.01)
+    # Drop any internal lines that fall outside the outer box
+    h_fracs = [f for f in h_fracs if top < f < bottom]
+    v_fracs = [f for f in v_fracs if left < f < right]
+    ys = [int(round(top * h))] + [int(round(f * h)) for f in h_fracs] + [int(round(bottom * h))]
+    xs = [int(round(left * w))] + [int(round(f * w)) for f in v_fracs] + [int(round(right * w))]
+    rects = []
+    for ri in range(len(ys) - 1):
+        for ci in range(len(xs) - 1):
+            x1, x2 = xs[ci], xs[ci + 1]
+            y1, y2 = ys[ri], ys[ri + 1]
+            if x2 > x1 and y2 > y1:
+                rects.append((x1, y1, x2 - x1, y2 - y1))
+    return rects
+
+
+def _annotate_image(
+    bgr: np.ndarray,
+    mode: str,
+    rows: int,
+    cols: int,
+    h_lines: list = None,
+    v_lines: list = None,
+    top: float = 0.0,
+    bottom: float = 1.0,
+    left: float = 0.0,
+    right: float = 1.0,
+) -> tuple:
+    """
+    Run detection only, draw card boundaries on a copy of the image,
+    return (annotated_jpeg_bytes, card_count, lines_dict).
+
+    h_lines/v_lines: optional normalized internal line positions (0..1).
+    top/bottom/left/right: optional outer crop bounds (0..1), default full image.
+    When provided in grid mode, override default equal-spacing.
+    """
+    from utils.improved_card_detector import ImprovedCardDetector
+    from utils.ui_components import split_image_grid
+
+    h, w = bgr.shape[:2]
+    annotated = bgr.copy()
+    boxes = []  # list of (x, y, w, h) or polygon
+    lines_out = {
+        "h": [],
+        "v": [],
+        "top": top,
+        "bottom": bottom,
+        "left": left,
+        "right": right,
+    }
+    inferred_grid = None  # (rows, cols) if auto detector chose a grid layout
+
+    if mode == "single":
+        boxes.append(("rect", (0, 0, w, h)))
+    elif mode == "grid":
+        # Determine internal line positions
+        if not h_lines:
+            h_lines = [top + (i + 1) * (bottom - top) / rows for i in range(rows - 1)]
+        if not v_lines:
+            v_lines = [left + (i + 1) * (right - left) / cols for i in range(cols - 1)]
+        lines_out = {
+            "h": list(h_lines),
+            "v": list(v_lines),
+            "top": top,
+            "bottom": bottom,
+            "left": left,
+            "right": right,
+        }
+        for rect in _grid_rects_from_lines(w, h, h_lines, v_lines, top, bottom, left, right):
+            boxes.append(("rect", rect))
+    else:
+        # Use CardProcessor.detect_cards so preview matches the real scan
+        processor = CardProcessor(provider_factory=_provider_factory)
+        detected = processor.detect_cards(bgr, "Automatic", rows, cols, 0, 0, 0, 0)
+
+        contour_polys = [c for _, c in detected if c is not None]
+        if contour_polys:
+            # We have real polygon contours — draw them
+            for c in contour_polys:
+                boxes.append(("poly", c))
+        elif detected:
+            # Detector fell back to a non-contour split (gap-based or uniform
+            # grid). To show TRUE positions (not a re-inferred uniform grid),
+            # replicate the detector's gap-detection logic to get actual
+            # row/col bounds; if gap detection finds nothing, fall back to
+            # uniform inference + blank filter.
+            from utils.improved_card_detector import _is_blank_cell
+
+            gray = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
+            edges = cv2.Canny(gray, 50, 150)
+            h_proj = np.sum(edges, axis=1).astype(float)
+            v_proj = np.sum(edges, axis=0).astype(float)
+            h_smooth = np.convolve(h_proj, np.ones(3) / 3, mode="same")
+            v_smooth = np.convolve(v_proj, np.ones(3) / 3, mode="same")
+
+            _gap_detector = ImprovedCardDetector()
+            row_splits = _gap_detector._find_gap_positions(h_smooth, h, cross_length=w)
+            col_splits = _gap_detector._find_gap_positions(v_smooth, w, cross_length=h)
+
+            used_gap_split = bool(row_splits or col_splits)
+            if used_gap_split:
+                # Gap-detection found real edges between cards. Don't apply
+                # the blank-cell filter (tuned for uniform-grid fallback;
+                # over-rejects sparse white cards like Marcos's Spanish
+                # consulate card).
+                row_bounds = [0] + row_splits + [h]
+                col_bounds = [0] + col_splits + [w]
+
+                # ─── Post-process: regularize rows/cols ─────────────────
+                # The gap detector often (a) treats the outer margin as a
+                # row separator, creating a tiny empty band at the top/
+                # bottom; (b) misses the gap between two card rows,
+                # producing a band that's > 1.6× the median. Fix:
+                #   1. Drop bands < 50% of median (margins)
+                #   2. For an oversized band, re-run gap detection on
+                #      JUST that slice with relaxed thresholds to find
+                #      the missed gap. If that fails, fall back to even
+                #      splitting as a last resort.
+                def find_inner_gaps(bgr_slice, axis, expected_count):
+                    """Look for `expected_count` actual gaps inside a slice."""
+                    if expected_count < 1:
+                        return []
+                    g = cv2.cvtColor(bgr_slice, cv2.COLOR_BGR2GRAY)
+                    e = cv2.Canny(g, 50, 150)
+                    if axis == "row":
+                        proj = np.sum(e, axis=1).astype(float)
+                        length = bgr_slice.shape[0]
+                        cross = bgr_slice.shape[1]
+                    else:
+                        proj = np.sum(e, axis=0).astype(float)
+                        length = bgr_slice.shape[1]
+                        cross = bgr_slice.shape[0]
+                    sm = np.convolve(proj, np.ones(3) / 3, mode="same")
+                    d2 = ImprovedCardDetector()
+                    splits = d2._find_gap_positions(sm, length, cross_length=cross)
+                    if len(splits) >= expected_count:
+                        # Keep the deepest `expected_count` gaps (lowest
+                        # smoothed projection at each candidate position)
+                        scored = sorted(splits, key=lambda p: sm[max(0, min(len(sm) - 1, p))])
+                        return sorted(scored[:expected_count])
+                    return splits
+
+                def regularize(bounds: list, axis: str) -> list:
+                    if len(bounds) < 3:
+                        return bounds
+                    spans = [bounds[i + 1] - bounds[i] for i in range(len(bounds) - 1)]
+                    median = sorted(spans)[len(spans) // 2]
+                    # Drop tiny outer bands (top/bottom margin only)
+                    if spans[0] < 0.5 * median:
+                        bounds = bounds[1:]
+                        spans = [bounds[i + 1] - bounds[i] for i in range(len(bounds) - 1)]
+                    if spans and spans[-1] < 0.5 * median:
+                        bounds = bounds[:-1]
+                        spans = [bounds[i + 1] - bounds[i] for i in range(len(bounds) - 1)]
+                    # Re-anchor first to image edge
+                    bounds[0] = 0
+                    # Split bands that look like N merged rows
+                    out = [bounds[0]]
+                    for i in range(len(bounds) - 1):
+                        a, b = bounds[i], bounds[i + 1]
+                        span = b - a
+                        n_sub = max(1, int(round(span / median)))
+                        if n_sub > 1:
+                            # Try to find the real gaps inside this slice
+                            if axis == "row":
+                                sl = bgr[a:b]
+                            else:
+                                sl = bgr[:, a:b]
+                            inner = find_inner_gaps(sl, axis, n_sub - 1)
+                            if len(inner) == n_sub - 1:
+                                for s in inner:
+                                    out.append(a + s)
+                            else:
+                                # Fallback: even split
+                                for k in range(1, n_sub):
+                                    out.append(a + int(round(k * span / n_sub)))
+                        out.append(b)
+                    return out
+
+                row_bounds = regularize(row_bounds, "row")
+                col_bounds = regularize(col_bounds, "col")
+                # Re-anchor to image extent so we don't lose pixels
+                row_bounds[0] = 0
+                row_bounds[-1] = h
+                col_bounds[0] = 0
+                col_bounds[-1] = w
+
+                inferred_grid = (len(row_bounds) - 1, len(col_bounds) - 1)
+                for r in range(len(row_bounds) - 1):
+                    for c in range(len(col_bounds) - 1):
+                        y1, y2 = row_bounds[r], row_bounds[r + 1]
+                        x1, x2 = col_bounds[c], col_bounds[c + 1]
+                        if y2 - y1 < 80 or x2 - x1 < 80:
+                            continue
+                        boxes.append(("rect", (x1, y1, x2 - x1, y2 - y1)))
+            else:
+                # Last-resort uniform grid (no gaps found at all)
+                sample_h, sample_w = detected[0][0].shape[:2]
+                grid_rows = max(1, round(h / sample_h))
+                grid_cols = max(1, round(w / sample_w))
+                inferred_grid = (grid_rows, grid_cols)
+                ch = h // grid_rows
+                cw = w // grid_cols
+                for r in range(grid_rows):
+                    for c in range(grid_cols):
+                        x1 = c * cw
+                        y1 = r * ch
+                        x2 = (c + 1) * cw if c < grid_cols - 1 else w
+                        y2 = (r + 1) * ch if r < grid_rows - 1 else h
+                        tile = bgr[y1:y2, x1:x2]
+                        if not _is_blank_cell(tile):
+                            boxes.append(("rect", (x1, y1, x2 - x1, y2 - y1)))
+
+    # In grid mode the React overlay draws everything (outer crop, internal
+    # dividers, dim mask, drag handles, tile numbers) — skip server-side
+    # annotation to avoid double-rendering. Just report the count + lines.
+    if mode == "grid":
+        if w > 1400:
+            scale = 1400 / w
+            annotated = cv2.resize(annotated, (1400, int(h * scale)))
+        ok, buf = cv2.imencode(".jpg", annotated, [cv2.IMWRITE_JPEG_QUALITY, 82])
+        if not ok:
+            raise ValueError("Failed to encode preview JPEG")
+        return bytes(buf), len(boxes), lines_out, inferred_grid
+
+    # Draw (auto / single modes)
+    GREEN = (60, 200, 90)
+    thickness = max(3, int(min(w, h) * 0.004))
+    font_scale = max(1.0, min(w, h) * 0.001)
+    for i, (kind, data) in enumerate(boxes):
+        label = str(i + 1)
+        if kind == "rect":
+            x, y, bw, bh = data
+            cv2.rectangle(annotated, (x, y), (x + bw, y + bh), GREEN, thickness)
+            cx, cy = x + 40, y + 60
+        else:
+            cv2.drawContours(annotated, [data], -1, GREEN, thickness)
+            M = cv2.moments(data)
+            if M["m00"] > 0:
+                cx = int(M["m10"] / M["m00"]) - 20
+                cy = int(M["m01"] / M["m00"]) + 20
+            else:
+                cx, cy = 40, 60
+        # Filled label background for legibility
+        (tw, th), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, font_scale, thickness)
+        cv2.rectangle(annotated, (cx - 8, cy - th - 8), (cx + tw + 8, cy + 8), GREEN, -1)
+        cv2.putText(
+            annotated,
+            label,
+            (cx, cy),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            font_scale,
+            (255, 255, 255),
+            thickness,
+        )
+
+    # Resize for transport (max 1400 px wide)
+    if w > 1400:
+        scale = 1400 / w
+        annotated = cv2.resize(annotated, (1400, int(h * scale)))
+    ok, buf = cv2.imencode(".jpg", annotated, [cv2.IMWRITE_JPEG_QUALITY, 82])
+    if not ok:
+        raise ValueError("Failed to encode preview JPEG")
+    return bytes(buf), len(boxes), lines_out, inferred_grid
+
+
+def _clamp01(v: float, default: float) -> float:
+    try:
+        return max(0.0, min(1.0, float(v)))
+    except (TypeError, ValueError):
+        return default
+
+
+@app.post("/api/preview")
+async def preview(
+    files: List[UploadFile] = File(...),
+    mode: str = Form("auto"),
+    rows: int = Form(4),
+    cols: int = Form(2),
+    row_lines: str = Form(""),
+    col_lines: str = Form(""),
+    margin_top: float = Form(0.0),
+    margin_bottom: float = Form(1.0),
+    margin_left: float = Form(0.0),
+    margin_right: float = Form(1.0),
+    deskew: bool = Form(False),
+):
+    """Run detection only (no vision/LLM) and return annotated previews.
+    Optional row_lines/col_lines: comma-separated floats in (0,1) for manual
+    grid line positions (only used when mode=grid).
+    margin_top/bottom/left/right: outer crop bounds (0..1).
+    deskew: if true, find the card-cluster region and warp it to axis-aligned
+    rectangle before detection. Helpful for photographed images."""
+    import base64
+
+    h_lines = _parse_line_positions(row_lines)
+    v_lines = _parse_line_positions(col_lines)
+    mt = _clamp01(margin_top, 0.0)
+    mb = _clamp01(margin_bottom, 1.0)
+    ml = _clamp01(margin_left, 0.0)
+    mr = _clamp01(margin_right, 1.0)
+
+    previews = []
+    for upload in files:
+        raw = await upload.read()
+        filename = upload.filename or "upload"
+        err = _validate_upload(filename, raw)
+        if err:
+            previews.append({"filename": filename, "error": err})
+            continue
+        try:
+            # PDFs: detect on page 0 only for preview
+            bgr, _ = _load_image(raw, filename)
+            if deskew:
+                bgr = _deskew_to_card_cluster(bgr)
+            loop = asyncio.get_event_loop()
+            jpeg_bytes, count, lines, inferred = await loop.run_in_executor(
+                None,
+                lambda: _annotate_image(bgr, mode, rows, cols, h_lines, v_lines, mt, mb, ml, mr),
+            )
+            b64 = base64.b64encode(jpeg_bytes).decode("ascii")
+            previews.append(
+                {
+                    "filename": filename,
+                    "cardCount": count,
+                    "imageDataUrl": f"data:image/jpeg;base64,{b64}",
+                    "lines": lines,  # {h, v, top, bottom, left, right}
+                    "inferredGrid": (
+                        {"rows": inferred[0], "cols": inferred[1]} if inferred else None
+                    ),
+                }
+            )
+        except Exception as e:
+            previews.append({"filename": filename, "error": str(e)})
+    total = sum(p.get("cardCount", 0) for p in previews)
+    return {"previews": previews, "totalCards": total}
+
+
 @app.post("/api/scan")
 async def scan(
     files: List[UploadFile] = File(...),
@@ -575,10 +1384,31 @@ async def scan(
     rows: int = Form(4),
     cols: int = Form(2),
     timeout: int = Form(300),
+    row_lines: str = Form(""),
+    col_lines: str = Form(""),
+    margin_top: float = Form(0.0),
+    margin_bottom: float = Form(1.0),
+    margin_left: float = Form(0.0),
+    margin_right: float = Form(1.0),
+    deskew: bool = Form(False),
 ):
     """Stream scan progress via SSE (text/event-stream)."""
     return StreamingResponse(
-        _scan_generator(files, model, mode, rows, cols, timeout),
+        _scan_generator(
+            files,
+            model,
+            mode,
+            rows,
+            cols,
+            timeout,
+            row_lines,
+            col_lines,
+            _clamp01(margin_top, 0.0),
+            _clamp01(margin_bottom, 1.0),
+            _clamp01(margin_left, 0.0),
+            _clamp01(margin_right, 1.0),
+            deskew,
+        ),
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",

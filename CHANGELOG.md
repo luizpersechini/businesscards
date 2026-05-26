@@ -2,11 +2,43 @@
 
 All notable changes to the Business Card Scanner project will be documented in this file.
 
+## [2.1.0] — 2026-05-25
+
+Detection & extraction overhaul aimed at photographed multi-card images (phone-camera shots, not just flatbed scans). Auto mode now reliably extracts every card in a 6×3 layout where it previously got 7/18.
+
+### Added
+
+- **Interactive preview phase** — between Upload and Extract. `POST /api/preview` runs detection-only (no LLM), returns an annotated JPEG + tile count + inferred grid dims. Lets you confirm tiling before committing to slow vision inference.
+- **Draggable grid editor** (Grid mode) — `GridOverlay` React component renders dashed internal dividers + solid outer crop rectangle + drag handles. Move row/column lines, drag the 4 outer edges to crop margins, dim mask shows excluded area. Lines clamp at 2 % min gap; debounced re-preview fires 350 ms after any drag.
+- **"Apply N×N grid" suggestion** — when Auto mode falls back to a grid layout, the preview returns the inferred `(rows, cols)` and a one-click banner offers to switch to Grid mode with those dims.
+- **Auto-deskew toggle** — opt-in pre-detection warp via `_deskew_to_card_cluster()`: finds the convex region containing all cards using edge density + morphological close, then applies four-point perspective transform so cards become axis-aligned before detection. Skipped automatically if cluster is < 25 % of the image or rotation < 1.5°.
+- **Per-tile card refinement** — `_refine_tile_to_card()` runs CLAHE + 3 parallel edge strategies (Canny low, Canny high, adaptive threshold) inside every grid tile to find the actual card boundary, then four-point-warps or tight-crops to it. Drops inter-card gap pixels that confuse the vision model.
+- **Gap-detection regularization** — `_gap_detect_and_regularize()`: drops outer bands < 50 % of median height (margins), splits oversized bands > 160 % of median, and re-runs `_find_gap_positions()` _inside_ each oversized band to find the real missed gap (not just an equal split).
+- **HEIC / HEIF / WEBP upload support** — file picker `accept` + drag-drop filter accept these formats; server falls back to Pillow + `pillow-heif` when `cv2.imdecode` returns None.
+- **Inline error & warning banners** in the Scanner — replaces silent `console.error` failures. Per-event SSE `error`/`warning` stages now surface visibly in the right pane.
+
+### Changed
+
+- `_scan_generator` no longer calls `CardProcessor.process_batch()` directly. Auto / Single / Single-card-from-PDF all route through `_process_with_refinement()`, which keeps contour-based detections as-is (already perspective-corrected by the detector) but runs `_refine_tile_to_card()` on every contour-less rectangular tile.
+- When Auto detector returns few cells (gap detection failing on a real grid), `_process_with_refinement()` overrides with `_gap_detect_and_regularize()` and refines each cell — this is what restored 18/18 extraction on `IMG_1544.heic`.
+- Preview annotation skipped in Grid mode — server returns the raw JPEG and the React overlay draws _everything_ (boundaries, dim mask, drag handles, tile numbers). Eliminates the previous "double-rendering" mess where server-baked thick green lines overlapped with React's dashed lines.
+- Auto preview uses gap-detection bounds instead of re-inferring a uniform grid from sample dimensions — the inferred grid dims now match what the detector actually used, not a fictional uniform grid.
+
+### Fixed
+
+- HEIC uploads from iPhone no longer fail with `Could not decode image: IMG_*.heic`.
+- Preview now matches scan card count for Auto mode (was off by 5+ on photographed layouts because uniform-grid inference re-introduced phantom cells the detector had already filtered).
+- Bottom row of cards in photographed grids no longer gets merged with the row above; the regularizer re-runs gap detection inside oversized bands to find the real divider.
+- Scan timer / progress interval now clears on `done` and `error` events (was leaking until the component unmounted).
+
+---
+
 ## [2.0.0] — 2026-05
 
 Major architectural change: **Streamlit removed; FastAPI + React is now the only frontend.**
 
 ### Added
+
 - **`server.py`** — FastAPI backend with REST + SSE streaming for the scan pipeline.
 - **React UI** under `frontend/index.html` (and `business-card-reader/project/` design source).
 - **Stop button** on the scanner with `POST /api/scan/stop` + per-card cancellation checkpoints in `CardProcessor.process_batch`.
@@ -24,6 +56,7 @@ Major architectural change: **Streamlit removed; FastAPI + React is now the only
 - **macOS launcher** (`BusinessCardScanner.app`) — double-clickable Dock icon that starts the server and opens the browser, with a paired `StopBusinessCardScanner.app` for clean shutdown.
 
 ### Changed
+
 - `pyproject.toml` bumped to **2.0.0**, `requires-python>=3.10`, black/ruff/mypy targets bumped to py310.
 - Provider package now uses relative imports (`from ..models import …`) instead of `sys.path.insert` hacks.
 - Claude Opus model ID corrected (`claude-opus-4-6` → `claude-opus-4-7`).
@@ -32,6 +65,7 @@ Major architectural change: **Streamlit removed; FastAPI + React is now the only
 - History persistence call signature corrected (was raising TypeError silently every scan).
 
 ### Removed
+
 - `app.py` (Streamlit UI), `start_app.sh`, `tests/test_app.py`.
 - `utils/ms_graph.py` (Outlook 365 sync — never wired into the React UI; recoverable from git history if needed).
 - Dead utils: `ocr_processor.py`, `csv_validator.py`, `logging_config.py`, `pdf_processor.py`, `pdf_memory_optimizer.py`, `performance_monitor.py`.
@@ -45,6 +79,7 @@ Major architectural change: **Streamlit removed; FastAPI + React is now the only
 ### 🎨 UI Improvements & Code Cleanup
 
 #### Added
+
 - **CSV Validator Module** (`utils/csv_validator.py`): Diagnostic tool for Outlook CSV compatibility
   - Validates CSV format, encoding, line endings, and field names
   - Generates detailed diagnostic reports
@@ -56,6 +91,7 @@ Major architectural change: **Streamlit removed; FastAPI + React is now the only
   - Based on analysis of actual Outlook CSV exports
 
 #### Changed
+
 - **UI Cleanup**: Major interface reorganization
   - Removed regular CSV export option (kept only Outlook CSV)
   - Individual cards now displayed as compact list format with smaller icons
@@ -79,6 +115,7 @@ Major architectural change: **Streamlit removed; FastAPI + React is now the only
   - Quote/no-quote options for troubleshooting
 
 #### Removed
+
 - **OCR+LLM Mode**: Completely removed OCR+LLM processing option
   - Removed `OCRProcessor` imports and initialization
   - Removed `LLMProcessor` imports and initialization
@@ -92,12 +129,14 @@ Major architectural change: **Streamlit removed; FastAPI + React is now the only
   - Outlook CSV is now the primary CSV format
 
 #### Fixed
+
 - **Outlook CSV Import**: Fixed email and phone field import issues
   - CSV format now matches Outlook export exactly (tested successfully)
   - Proper field ordering and naming ensures automatic mapping
   - Email and phone fields now import correctly to Outlook
 
 #### Technical
+
 - Simplified codebase by removing unused OCR/LLM processing paths
 - Reduced dependencies (no longer need OCRProcessor/LLMProcessor for main flow)
 - Better separation of concerns in export module
@@ -108,6 +147,7 @@ Major architectural change: **Streamlit removed; FastAPI + React is now the only
 ### 🆕 Major Feature: Multiple Export Formats
 
 #### Added - Export Formats
+
 - **CSV Export**: Universal spreadsheet format for Excel/Google Sheets
   - Includes source file column
   - UTF-8 encoding for international characters
@@ -128,6 +168,7 @@ Major architectural change: **Streamlit removed; FastAPI + React is now the only
   - User selects which formats to include
 
 #### Added - Export UI Enhancements
+
 - **Format Selection Checkboxes**: Choose VCF, CSV, Excel, or Outlook CSV
 - **Export Statistics**: Summary showing contacts with email/phone/company
 - **Helpful Tooltips**: Explains each export format's purpose
@@ -135,6 +176,7 @@ Major architectural change: **Streamlit removed; FastAPI + React is now the only
 - **Smart Defaults**: VCF and CSV enabled by default
 
 #### Added - New Module
+
 - `utils/export_processor.py`: Unified export handling
   - `contacts_to_dataframe()`: Convert contacts to pandas DataFrame
   - `export_to_csv()`: Generate CSV with optional source column
@@ -144,15 +186,18 @@ Major architectural change: **Streamlit removed; FastAPI + React is now the only
   - `get_export_stats()`: Calculate contact statistics
 
 #### Changed
+
 - Download section reorganized for better UX
 - Export options now customizable per user preference
 - ZIP package now includes multiple formats, not just VCF
 
 #### Dependencies
+
 - Added `pandas==2.0.3` for data manipulation
 - Added `openpyxl==3.1.2` for Excel file generation
 
 #### Benefits
+
 - ✅ Import contacts into CRM systems via CSV
 - ✅ Share formatted contact lists in Excel
 - ✅ Direct Outlook import without VCF hassles
@@ -166,6 +211,7 @@ Major architectural change: **Streamlit removed; FastAPI + React is now the only
 ### 🎯 Major Feature: Vision Mode
 
 #### Added (Latest Updates)
+
 - **Vision Processor Module** (`utils/vision_processor.py`)
   - Direct image analysis using Ollama vision models
   - Supports: llama3.2-vision, llava, llava:13b, bakllava
@@ -187,6 +233,7 @@ Major architectural change: **Streamlit removed; FastAPI + React is now the only
   - More reliable detection overall
 
 #### Fixed (Bug Fixes)
+
 - **PNG Encoding**: Switched from JPEG to PNG for better reliability (fixes "0xff00 sequence" errors)
 - **VCF Generation**: Added `_sanitize_contact_data()` to handle None/null values from vision model
 - **QR Fallback**: Auto-uses QR code data when vision processing times out or fails
@@ -194,6 +241,7 @@ Major architectural change: **Streamlit removed; FastAPI + React is now the only
 - **Memory Handling**: Fixed non-contiguous array issues and multi-format support
 
 #### Changed
+
 - QR detection now always attempts to read codes (no more "disabled" state)
 - Sidebar UI adapts based on processing mode selected
 - Better error messages with actionable suggestions
@@ -201,6 +249,7 @@ Major architectural change: **Streamlit removed; FastAPI + React is now the only
 - Timeout errors now gracefully fallback to QR data if available
 
 #### Benefits of Vision Mode
+
 - ✅ No more OCR errors on rotated/skewed text
 - ✅ Better handling of complex card layouts
 - ✅ Understands context better than OCR + text parsing
@@ -209,16 +258,19 @@ Major architectural change: **Streamlit removed; FastAPI + React is now the only
 - ✅ Better multi-language support (vision models handle any language)
 
 #### Configuration
+
 - **Configurable Timeout**: 60-300 seconds (default: 180s/3 min)
 - Timeout slider in sidebar for user customization
 - Visible timeout feedback in processing spinner
 
 #### Trade-offs
+
 - ⚠️ Slower: 30-60s per card vs 5-10s for OCR mode
 - ⚠️ Higher memory usage (~4-8GB VRAM recommended)
 - ⚠️ Requires vision model: `ollama pull llama3.2-vision`
 
 #### Production Ready
+
 - ✅ Handles 7+ cards in batch processing
 - ✅ QR code fallback for timeout errors
 - ✅ Robust error handling with graceful degradation
@@ -232,6 +284,7 @@ Major architectural change: **Streamlit removed; FastAPI + React is now the only
 ### 🎉 Initial Release
 
 #### Added
+
 - **Core Features**
   - Web-based interface using Streamlit
   - Multiple card detection modes (Improved Auto, Automatic, Manual Grid, Manual Single)
@@ -269,12 +322,14 @@ Major architectural change: **Streamlit removed; FastAPI + React is now the only
   - Setup scripts (setup.sh, start_app.sh)
 
 #### Technical Details
+
 - **Dependencies**: Streamlit, OpenCV, EasyOCR, pyzbar, vobject, Ollama
 - **Python Version**: 3.8+
 - **Platform**: macOS (tested), Linux (should work), Windows (may need adjustments)
 - **LLM Models**: Supports any Ollama model (llama3.2, mistral, etc.)
 
 #### Known Limitations
+
 - QR code reading requires zbar library and proper DYLD_LIBRARY_PATH
 - Grid layout margins need manual adjustment for best results
 - LLM quality varies by model selection
