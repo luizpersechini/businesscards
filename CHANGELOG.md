@@ -2,6 +2,14 @@
 
 All notable changes to the Business Card Scanner project will be documented in this file.
 
+## [2.1.3] — 2026-05-26
+
+### Fixed
+
+- **HEIC uploads rejected with "File content does not match a supported image/PDF format".** The upload validator's magic-byte sniff only accepted two specific ISOBMFF `ftyp` box lengths (`0x18` and `0x1c`). HEIC files from newer iOS versions use other box lengths (`0x14`, `0x20`, etc.) depending on the brand list, so they tripped the validator before even reaching the loader. Validator now checks the brand at bytes 8–11 against the full HEIF/HEIC/AVIF brand set (`heic, heix, hevc, hevx, heim, heis, hevm, hevs, mif1, msf1, heif, avif, avis`) and ignores box length, matching ISOBMFF spec. WEBP detection also tightened to require the `WEBP` fourCC at byte 8 (not just `RIFF` anywhere in the first 16 bytes).
+
+---
+
 ## [2.1.2] — 2026-05-26
 
 ### Fixed

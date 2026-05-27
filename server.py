@@ -101,14 +101,33 @@ def _safe_thumb_path(card_id: str) -> str:
 # ═══════════════════════════════════════════════════════════
 MAX_UPLOAD_BYTES = int(os.getenv("MAX_UPLOAD_BYTES", str(25 * 1024 * 1024)))  # 25 MB
 _ALLOWED_UPLOAD_EXTS = {".jpg", ".jpeg", ".png", ".heic", ".heif", ".webp", ".pdf"}
-# (ext) -> tuple of acceptable leading magic byte sequences
+# Leading byte signatures for the simple, fixed-prefix formats. HEIC / WEBP
+# are handled separately below because their ftyp/RIFF container boxes have
+# variable lengths.
 _MAGIC = {
     b"\xff\xd8\xff": "jpeg",
     b"\x89PNG\r\n\x1a\n": "png",
-    b"RIFF": "webp",  # RIFF....WEBP
     b"%PDF": "pdf",
-    b"\x00\x00\x00\x18ftyp": "heic",
-    b"\x00\x00\x00\x1cftyp": "heic",
+}
+# ISOBMFF ftyp "brand" codes that indicate a HEIF/HEIC family file. The first
+# 4 bytes of the file are the box length (variable), bytes 4-7 are "ftyp",
+# bytes 8-11 are the major brand. We accept the full HEIF / HEIC brand list
+# rather than guessing specific box lengths (the previous check was too narrow
+# and rejected legitimate HEIC files from newer iOS versions).
+_HEIF_BRANDS = {
+    b"heic",
+    b"heix",
+    b"hevc",
+    b"hevx",
+    b"heim",
+    b"heis",
+    b"hevm",
+    b"hevs",
+    b"mif1",
+    b"msf1",
+    b"heif",
+    b"avif",
+    b"avis",
 }
 
 
@@ -121,11 +140,22 @@ def _validate_upload(filename: str, raw: bytes) -> Optional[str]:
         return "Empty file"
     if len(raw) > MAX_UPLOAD_BYTES:
         return f"File too large ({len(raw)} bytes > {MAX_UPLOAD_BYTES} limit)"
-    # Magic-byte sniff (best-effort; HEIC/WEBP have ftyp/RIFF containers)
-    head = raw[:16]
-    if not any(head.startswith(sig) or sig in head[:16] for sig in _MAGIC):
-        return "File content does not match a supported image/PDF format"
-    return None
+
+    head = raw[:32]
+
+    # Simple fixed-prefix sniff: JPEG / PNG / PDF
+    if any(head.startswith(sig) for sig in _MAGIC):
+        return None
+    # WEBP: RIFF<size>WEBP — RIFF at 0, WEBP at 8
+    if head.startswith(b"RIFF") and head[8:12] == b"WEBP":
+        return None
+    # HEIC / HEIF / AVIF: ISOBMFF — bytes 4-7 are 'ftyp', bytes 8-11 are
+    # the major brand. Box length (bytes 0-3) varies by brand list, so we
+    # don't constrain it.
+    if head[4:8] == b"ftyp" and head[8:12] in _HEIF_BRANDS:
+        return None
+
+    return "File content does not match a supported image/PDF format"
 
 
 # ═══════════════════════════════════════════════════════════
