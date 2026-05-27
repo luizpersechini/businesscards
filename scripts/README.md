@@ -26,10 +26,24 @@ Tick **Contacts** only. Keep the `.olm` somewhere safe. **There is no undo**; th
 
 ### Running it
 
-From Terminal:
+**Recommended — install into Outlook's Script menu (one-time):**
 
 ```bash
-osascript scripts/dedupe_outlook_contacts.applescript
+bash scripts/install.sh
+```
+
+The installer compiles the script into `~/Library/Application Scripts/com.microsoft.Outlook/Dedupe Contacts.scpt` and enables the macOS Script menu so it appears in Outlook's menu bar. After install:
+
+1. Switch to Outlook so it's the foreground app.
+2. Click the **scroll icon** in the menu bar (top-right, next to the clock).
+3. Choose **Dedupe Contacts**.
+
+Re-run `install.sh` any time the source `.applescript` changes — it overwrites in place.
+
+**Alternative — direct invocation:**
+
+```bash
+osascript "scripts/dedupe_outlook_contacts.applescript"
 ```
 
 Or open in **Script Editor** and click ▶ Run.
