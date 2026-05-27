@@ -2,6 +2,24 @@
 
 All notable changes to the Business Card Scanner project will be documented in this file.
 
+## [2.1.4] — 2026-05-26
+
+### Improved
+
+- **Website extraction in the OCR-parser path.** Previous regex was too narrow:
+  - Required 3+ domain labels (`label.label.tld`), so bare `acme.com` / `itaubba.com` were missed.
+  - TLD whitelist was only `com|br|net|org|io|ca|co|app` — `.gov`, `.gouv`, `.edu`, `.fr`, `.de`, `.it`, `.uk`, `.es`, `.gov.br`, etc. all slipped through.
+  - First-match-wins: if a card had both a bare domain and an `https://` URL, the bare one was taken.
+  - No prefix stripping: `URL: www.x.com` and `(www.x.com)` captured the extra chars.
+
+  New behaviour: collects all candidates, picks the strongest by score (explicit `https://` scheme > `www.` prefix > longest). Strips leading `URL:` / `Web:` / `Site:` / `Link:` / `Homepage:` prefixes and trailing punctuation. Supports the full common-TLD list including country TLDs and government/academic domains. **Priority order is preserved**: email/linkedin lines are still consumed first, name/company classification still runs after URL extraction, so a URL line can never be claimed as a company name.
+
+### Documented
+
+- The codebase-wide field priority is now: **Name → Company → Email → Phone → Website → others.** Higher-priority fields claim lines first; lower-priority extractors only see what's left. This invariant is encoded in the parser's run order and called out in `_parse_ocr_to_contact`.
+
+---
+
 ## [2.1.3] — 2026-05-26
 
 ### Fixed

@@ -457,19 +457,62 @@ class OllamaVisionProvider(VisionProvider):
                 break
 
         # ── Website ────────────────────────────────────────────────────────
+        # Priority order is enforced project-wide: Name > Company > Email >
+        # Phone > Website > others. Website runs AFTER email/linkedin (so
+        # email lines are excluded) but BEFORE phone/name/company detection
+        # so a URL line can't accidentally be claimed as a company name.
+        # Broaden the TLD list to cover the common ones we see in business
+        # cards: country TLDs (br, fr, de, es, uk, au, jp, ca, mx, ar, …),
+        # generic TLDs (com, net, org, info, biz, io, co, app, ai, dev),
+        # plus government / academic (gov, gov.br, gouv, edu, mil) and the
+        # Brazilian compound TLDs (com.br, org.br, gov.br, mg.gov.br, ...).
         web_re = re.compile(
-            r"(?:https?://|www\.)\S+|[\w.-]+\.(?:com|br|net|org|io|ca|co|app)\b", re.I
+            # 1. Explicit scheme or www. prefix — strongest signal
+            r"(?:https?://|www\.)[A-Za-z0-9._~:/?#@!$&'()*+,;=%\-]+"
+            # 2. Bare domain with known TLD. Allow 1+ labels before the
+            #    final TLD so both `acme.com` and `sub.acme.gov.br` match.
+            r"|\b[A-Za-z0-9](?:[A-Za-z0-9-]{0,62}[A-Za-z0-9])?"
+            r"(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,62}[A-Za-z0-9])?)*"
+            r"\.(?:com|net|org|info|biz|io|co|app|ai|dev|me|tv|us|uk|fr|de|es|it|pt|nl|be|ch|se|no|fi|dk|au|jp|cn|kr|mx|ar|cl|pe|ve|br|ca|ru|in|pl|cz|tr|gov|gouv|edu|mil)\b",
+            re.I,
         )
+
+        # Helper: prefer matches with a scheme/www, then longer matches.
+        def _score_website(s: str) -> tuple:
+            s_low = s.lower()
+            scheme = s_low.startswith("http://") or s_low.startswith("https://")
+            www = s_low.startswith("www.")
+            return (scheme, www, len(s))
+
+        url_prefix_re = re.compile(
+            r"^(?:url|web(?:site|page)?|site|link|home(?:page)?)\s*[:\-]\s*", re.I
+        )
+        candidates: List[tuple] = []  # (line_idx, match)
         for i, line in enumerate(lines):
             if i in consumed:
                 continue
-            if "linkedin.com" in line.lower():
+            line_clean = url_prefix_re.sub("", line.strip())
+            if "@" in line_clean:
+                continue  # skip email lines outright
+            if "linkedin.com" in line_clean.lower():
+                continue  # LinkedIn handled separately
+            m = web_re.search(line_clean)
+            if not m:
                 continue
-            m = web_re.search(line)
-            if m and "@" not in line:  # exclude email lines
-                contact["website"] = m.group(0).rstrip("/")
-                consumed.add(i)
-                break
+            url = m.group(0).rstrip(".,;:)]>\"'/ ")
+            # Reject obvious non-URLs the regex caught: bare two-word names
+            # ending in a TLD letter pair (e.g. "Ltd Co" wouldn't pass but
+            # something like "investment.io" with a known TLD does — keep
+            # those since they're real URLs).
+            if "." not in url or url.count(".") == 0:
+                continue
+            candidates.append((i, url))
+
+        if candidates:
+            # Pick the best candidate by score (scheme > www > length)
+            best_idx, best_url = max(candidates, key=lambda c: _score_website(c[1]))
+            contact["website"] = best_url
+            consumed.add(best_idx)
 
         # ── Compile shared regexes ────────────────────────────────────────
         # Improved company detection regex with better patterns
