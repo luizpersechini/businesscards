@@ -2,6 +2,24 @@
 
 All notable changes to the Business Card Scanner project will be documented in this file.
 
+## [2.1.11] — 2026-05-28
+
+### Fixed
+
+- **Field conflicts were invisible in the Scanner tab even when they existed.** The data was correct end-to-end (verified the SSE `done` event was emitting `repoStatus: "conflict"` with populated `conflicts: [...]` for every card that touched a locked existing contact), and the top-of-results banner was rendering — but it was easy to miss in dense result lists. Two new always-visible indicators:
+  - **Per-card status badge** in the header row, sitting next to the `via` / language badges:
+    - `2 conflicts` (amber) when locked-contact merge produced field disagreements
+    - `+3 merged` (green) when locked-contact merge added new fields without conflict
+    - `updated` (neutral) when an unlocked contact got overwritten with fresh scan data
+    - `new` (blue) when this is the first time the email was seen
+  - **Expandable conflict / additions panels** inside the card's expanded view. Click _More_ on any card and you see exactly which fields conflicted (`kept "X" · skipped "Y"`) and which fields were added by the merge.
+
+### Notes
+
+- The top banner from 2.1.5 is unchanged — still summarises the whole run, still has the _Show details_ toggle. The per-card badges + expanded panels are additive, so users who already used the banner workflow keep it.
+
+---
+
 ## [2.1.10] — 2026-05-28
 
 ### Added

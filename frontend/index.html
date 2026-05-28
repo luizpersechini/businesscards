@@ -2964,6 +2964,29 @@
                         color="neutral"
                       />
                     )}
+                    {/* Per-card repo-status badge. Surfaces conflict /
+                        merged outcomes right on the card itself, so the
+                        user spots them without scrolling to the top
+                        banner. Only shows when the card touched an
+                        existing repo entry. */}
+                    {card.repoStatus === "conflict" && (
+                      <Badge
+                        label={`${(card.conflicts || []).length} conflict${(card.conflicts || []).length !== 1 ? "s" : ""}`}
+                        color="amber"
+                      />
+                    )}
+                    {card.repoStatus === "merged" && (
+                      <Badge
+                        label={`+${Object.keys(card.additions || {}).length} merged`}
+                        color="green"
+                      />
+                    )}
+                    {card.repoStatus === "updated" && (
+                      <Badge label="updated" color="neutral" />
+                    )}
+                    {card.repoStatus === "added" && (
+                      <Badge label="new" color="blue" />
+                    )}
                     <Badge
                       label={card.via}
                       color={
@@ -3055,6 +3078,105 @@
                 }}
               >
                 <Divider style={{ marginBottom: 8 }} />
+                {/* Conflicts (if any) — most-actionable info shown first */}
+                {(card.conflicts || []).length > 0 && (
+                  <div
+                    style={{
+                      background: "var(--warning-soft)",
+                      border: "1px solid oklch(88% 0.06 60)",
+                      borderRadius: 6,
+                      padding: "8px 10px",
+                      marginBottom: 6,
+                    }}
+                  >
+                    <div
+                      style={{
+                        fontSize: 11,
+                        fontWeight: 700,
+                        color: "var(--warning)",
+                        textTransform: "uppercase",
+                        letterSpacing: "0.06em",
+                        marginBottom: 6,
+                      }}
+                    >
+                      Field conflicts (locked contact)
+                    </div>
+                    {(card.conflicts || []).map((cf, k) => (
+                      <div
+                        key={k}
+                        style={{
+                          fontSize: 11,
+                          marginBottom: 4,
+                          lineHeight: 1.5,
+                        }}
+                      >
+                        <strong style={{ color: "var(--text-primary)" }}>
+                          {cf.field}:
+                        </strong>{" "}
+                        kept{" "}
+                        <code
+                          style={{
+                            background: "var(--bg)",
+                            padding: "1px 5px",
+                            borderRadius: 3,
+                          }}
+                        >
+                          {String(cf.existing)}
+                        </code>{" "}
+                        · skipped{" "}
+                        <code
+                          style={{
+                            background: "var(--bg)",
+                            padding: "1px 5px",
+                            borderRadius: 3,
+                          }}
+                        >
+                          {String(cf.incoming)}
+                        </code>
+                      </div>
+                    ))}
+                  </div>
+                )}
+                {Object.keys(card.additions || {}).length > 0 && (
+                  <div
+                    style={{
+                      background: "var(--success-soft)",
+                      border: "1px solid oklch(88% 0.06 145)",
+                      borderRadius: 6,
+                      padding: "8px 10px",
+                      marginBottom: 6,
+                    }}
+                  >
+                    <div
+                      style={{
+                        fontSize: 11,
+                        fontWeight: 700,
+                        color: "var(--success)",
+                        textTransform: "uppercase",
+                        letterSpacing: "0.06em",
+                        marginBottom: 4,
+                      }}
+                    >
+                      Fields added to locked contact
+                    </div>
+                    <div style={{ fontSize: 11, lineHeight: 1.5 }}>
+                      {Object.entries(card.additions).map(([k, v], i) => (
+                        <div key={k}>
+                          <strong>{k}:</strong>{" "}
+                          <code
+                            style={{
+                              background: "var(--bg)",
+                              padding: "1px 5px",
+                              borderRadius: 3,
+                            }}
+                          >
+                            {String(v)}
+                          </code>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
                 {c.mobile && c.mobile !== c.phone && (
                   <div
                     style={{ display: "flex", gap: 8, alignItems: "center" }}
