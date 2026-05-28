@@ -2,6 +2,28 @@
 
 All notable changes to the Business Card Scanner project will be documented in this file.
 
+## [2.1.9] — 2026-05-28
+
+### Changed
+
+- **JSON-schema constrained decoding now applies to GLM-OCR too**, not just the LLM-vision fallback path. Previously gated to `not _is_ocr_model()` because an earlier schema embedded example values that GLM-OCR would parrot. Current schema uses only null defaults — nothing to copy. End-to-end test on `IMG_1544.heic` (the 18-card reference fixture):
+  - **name** went from 14/18 → 17/18
+  - **phone** went from 17/18 → 18/18
+  - **title** is now a separately-tracked field, 16/18 populated (previously bundled into name)
+  - **email / website** dipped slightly (-1, -6); the regex parser was better at extracting bare-domain URLs the model isn't emitting under structured output. Net win is substantial — proper field separation matters more than raw recall on website strings.
+- The OCR-regex parser (`_parse_ocr_to_contact`) is no longer the primary path; it's a **fallback** that only fires when the JSON parse fails on an OCR-named model.
+- Post-correction (`OCR_POST_CORRECTION_MODEL` env var) now applies on both paths, not just OCR — useful even with schema-constrained output for fixing accent loss.
+
+### Added
+
+- **`OLLAMA_DISABLE_JSON_SCHEMA=1` env var** as an emergency opt-out. Set to revert to the legacy raw-OCR-text path for `glm-ocr` (and any other model matching `_OCR_ONLY_MODELS`). Useful if a future GLM-OCR build regresses on JSON output.
+
+### Investigated, not shipped
+
+- Regex `pattern` constraints on the JSON schema (e.g. forcing `email` to match a regex). Ollama 0.24's grammar backend hangs the server on every pattern tried, even trivial ones like `^.{1,5}$`. Documented in the schema function's docstring; revisit when Ollama merges full XGrammar regex support. Until then we rely on downstream `phonenumbers` / `email_validator` for format validation.
+
+---
+
 ## [2.1.8] — 2026-05-27
 
 ### Added

@@ -179,19 +179,30 @@ class OllamaVisionProvider(VisionProvider):
             # and dramatically reduce inference time on CPU / low-VRAM machines.
             image_b64 = self.image_to_base64_compressed(card_image, max_size=1024, quality=85)
 
-            # ── Route to OCR-first or JSON-instruction path ─────────────────
-            if self._is_ocr_model():
-                # Pure OCR models (glm-ocr): ask for raw text, parse with Python.
-                # Do NOT send a JSON schema — these models copy example values
-                # instead of reading the image.
+            # ── Constrained JSON path (default for ALL models) ──────────────
+            # We used to gate this on `not _is_ocr_model()` because earlier
+            # schemas embedded example values that glm-ocr would parrot
+            # verbatim instead of reading the card. Our schema now uses only
+            # null defaults — no values to copy — and A/B testing showed
+            # glm-ocr returns *strictly better* output when constrained:
+            # valid JSON, more populated fields, less hallucinated markdown.
+            # So we apply the schema universally and fall back to the OCR
+            # regex parser only if the model still emits non-JSON for some
+            # reason.
+            #
+            # Opt-out for emergencies: set OLLAMA_DISABLE_JSON_SCHEMA=1 to
+            # revert to the old raw-OCR-text path for the named OCR models.
+            use_json_schema = os.environ.get("OLLAMA_DISABLE_JSON_SCHEMA", "").strip() != "1"
+            if use_json_schema:
+                prompt = self.build_extraction_prompt(qr_data)
+                num_predict = 512
+            elif self._is_ocr_model():
                 prompt = self._build_ocr_prompt()
-                num_predict = 400  # raw text is shorter than JSON
+                num_predict = 400
             else:
-                # Instruction-following LLM vision models (llama3.2-vision, llava…)
                 prompt = self.build_extraction_prompt(qr_data)
                 num_predict = 512
 
-            # Call Ollama API
             payload = {
                 "model": self.config.model_name,
                 "prompt": prompt,
@@ -204,14 +215,7 @@ class OllamaVisionProvider(VisionProvider):
                     "num_predict": num_predict,
                 },
             }
-
-            # For instruction-following LLM vision models (NOT pure OCR
-            # models), force the response to a JSON schema. Ollama >=0.5
-            # honours the `format` field as a JSON schema and constrains
-            # decoding so the output is guaranteed to parse.  This eliminates
-            # the multi-strategy fallback parsing in parse_json_response()
-            # for the happy path.
-            if not self._is_ocr_model():
+            if use_json_schema:
                 payload["format"] = self._contact_json_schema()
 
             response = requests.post(
@@ -222,30 +226,44 @@ class OllamaVisionProvider(VisionProvider):
                 result = response.json()
                 response_text = result.get("response", "").strip()
 
-                if self._is_ocr_model():
-                    # Merge QR data (higher confidence) on top of OCR parse
+                # Parse strategy:
+                #  - JSON-schema path (default): direct JSON parse; the
+                #    schema guarantees parseable output. If that somehow
+                #    fails on a model that doesn't honour the format
+                #    constraint, fall back to the OCR regex parser as a
+                #    safety net for OCR-named models.
+                #  - Raw-OCR path (OLLAMA_DISABLE_JSON_SCHEMA=1, OCR
+                #    models only): use the regex parser as before.
+                contact_dict = None
+                if use_json_schema:
+                    contact_dict = self.parse_json_response(response_text)
+                    if not contact_dict and self._is_ocr_model():
+                        # Schema-promised JSON didn't materialise — last
+                        # ditch, run the raw OCR parser anyway.
+                        contact_dict = self._parse_ocr_to_contact(response_text)
+                elif self._is_ocr_model():
                     contact_dict = self._parse_ocr_to_contact(response_text)
                     if qr_data:
                         for k, v in qr_data.items():
                             if v and not contact_dict.get(k):
                                 contact_dict[k] = v
-                    # Optional LLM post-correction. Off by default; enable
-                    # by setting OCR_POST_CORRECTION_MODEL=qwen2.5:3b (or
-                    # any other small instruction-following Ollama model)
-                    # to fix typos / accent loss / field swaps the regex
-                    # parser couldn't handle. ~2-5s extra per card.
-                    correction_model = os.environ.get("OCR_POST_CORRECTION_MODEL", "").strip()
-                    if correction_model:
-                        contact_dict = (
-                            self._llm_post_correct(
-                                raw_text=response_text,
-                                parsed=contact_dict,
-                                model=correction_model,
-                            )
-                            or contact_dict
-                        )
                 else:
                     contact_dict = self.parse_json_response(response_text)
+
+                # Optional LLM post-correction. Off by default; enable
+                # by setting OCR_POST_CORRECTION_MODEL=qwen2.5:3b (or
+                # any other small instruction-following Ollama model)
+                # to fix typos / accent loss / field swaps. ~2-5s/card.
+                correction_model = os.environ.get("OCR_POST_CORRECTION_MODEL", "").strip()
+                if correction_model and contact_dict:
+                    contact_dict = (
+                        self._llm_post_correct(
+                            raw_text=response_text,
+                            parsed=contact_dict,
+                            model=correction_model,
+                        )
+                        or contact_dict
+                    )
 
                 return self._make_scan_result(contact_dict, start_time, qr_used=bool(qr_data))
             else:
@@ -303,32 +321,49 @@ class OllamaVisionProvider(VisionProvider):
     def _contact_json_schema() -> Dict:
         """JSON schema enforced by Ollama's `format` field for LLM vision
         models. Mirrors the keys used by ContactInfo.from_legacy_dict so
-        existing downstream code keeps working unchanged."""
+        existing downstream code keeps working unchanged.
+
+        What this schema enforces:
+          - Object shape: exactly the 16 contact fields, nothing else.
+          - Field types: each field is `string | null`. The model can no
+            longer return a nested object, an array, or a number for a
+            name / email / etc.
+          - additionalProperties: false — extra keys are rejected so the
+            model can't invent "department" or "extension" on the side.
+
+        What this schema does NOT enforce (intentionally, see below):
+          - Regex `pattern` constraints on email / phone / website etc.
+            Ollama 0.24's grammar backend compiles patterns through a
+            JSON-Schema → GBNF path that hangs the server on anything
+            non-trivial (every pattern we tried, even `^.{1,5}$`, caused
+            RemoteDisconnected within 10s). We rely on downstream
+            validators (`phonenumbers`, `email_validator`) instead.
+            Revisit if/when Ollama merges full XGrammar regex support.
+        """
+
         nullable_string = {"type": ["string", "null"]}
+        all_keys = [
+            "firstName",
+            "lastName",
+            "fullName",
+            "title",
+            "company",
+            "email",
+            "phone",
+            "mobile",
+            "address",
+            "city",
+            "state",
+            "zip",
+            "country",
+            "website",
+            "linkedin",
+            "notes",
+        ]
         return {
             "type": "object",
             "additionalProperties": False,
-            "properties": {
-                key: nullable_string
-                for key in [
-                    "firstName",
-                    "lastName",
-                    "fullName",
-                    "title",
-                    "company",
-                    "email",
-                    "phone",
-                    "mobile",
-                    "address",
-                    "city",
-                    "state",
-                    "zip",
-                    "country",
-                    "website",
-                    "linkedin",
-                    "notes",
-                ]
-            },
+            "properties": {k: nullable_string for k in all_keys},
         }
 
     def _llm_post_correct(
