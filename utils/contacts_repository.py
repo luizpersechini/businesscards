@@ -50,35 +50,136 @@ class ContactsRepository:
 
     # ── CRUD ───────────────────────────────────────────────────────────────
 
-    def add_contact(self, contact_data: Dict, source_file: str = "",
-                    vcf_content: str = "", card_id: str = "") -> str:
-        """
-        Add a contact to the repository.
+    # Fields that count as "real data" for merge-conflict purposes. We
+    # ignore casing + whitespace on comparison so "Acme Corp" vs "acme
+    # corp" doesn't trip a conflict.
+    _MERGEABLE_FIELDS = (
+        "firstName",
+        "lastName",
+        "fullName",
+        "title",
+        "company",
+        "email",
+        "phone",
+        "mobile",
+        "website",
+        "linkedin",
+        "address",
+        "city",
+        "state",
+        "zip",
+        "country",
+        "notes",
+    )
 
-        Args:
-            contact_data: Legacy-format contact dict (firstName, lastName, email, etc.)
-            source_file: Original image filename this contact was scanned from
-            vcf_content: Pre-generated VCF string
-            card_id: Optional card ID for thumbnail association
+    @staticmethod
+    def _norm_field(v) -> str:
+        if v is None or v == "":
+            return ""
+        try:
+            return " ".join(str(v).strip().lower().split())
+        except Exception:
+            return ""
 
-        Returns:
-            The new contact's UUID
+    def _merge_or_conflict(self, existing: Dict, incoming: Dict) -> Dict:
         """
-        # Check for duplicate by email
+        Compare an incoming contact_data dict against an existing one.
+        Returns a dict with:
+          - `additions`: {field: value} — fields the existing was missing
+              that the incoming has; these are safe to merge in.
+          - `conflicts`: [{field, existing, incoming}] — fields where
+              both sides have a value and they differ. Caller decides
+              how to resolve.
+        """
+        additions: Dict = {}
+        conflicts: List[Dict] = []
+        for k in self._MERGEABLE_FIELDS:
+            ex = existing.get(k)
+            inc = incoming.get(k)
+            ex_norm = self._norm_field(ex)
+            inc_norm = self._norm_field(inc)
+            if not inc_norm:
+                continue  # incoming has nothing useful for this field
+            if not ex_norm:
+                additions[k] = inc
+            elif ex_norm != inc_norm:
+                conflicts.append({"field": k, "existing": ex, "incoming": inc})
+            # else: both equal → no-op
+        return {"additions": additions, "conflicts": conflicts}
+
+    def add_contact(
+        self, contact_data: Dict, source_file: str = "", vcf_content: str = "", card_id: str = ""
+    ) -> Dict:
+        """
+        Add (or merge into) a contact in the repository.
+
+        Behaviour when an existing contact matches by email:
+          - If the existing contact is **locked**: only fields that the
+            existing doesn't already have are merged in (additive).
+            Any field where existing and incoming disagree is reported
+            as a conflict for the user to resolve manually. The
+            existing record's `vcf_content`, `source_file`, `card_id`
+            etc. are preserved.
+          - If the existing contact is **unlocked**: the existing
+            record is overwritten with the incoming data (legacy
+            behaviour — this matches what users get when re-scanning
+            a card to refresh extracted data).
+
+        Returns a dict with:
+          - `id`: the contact's repository UUID
+          - `status`: one of "added", "updated", "merged", "conflict"
+          - `additions`: dict of fields newly populated (locked path only)
+          - `conflicts`: list of {field, existing, incoming} dicts
+                         (locked path only; empty list otherwise)
+        """
         email = (contact_data.get("email") or "").strip().lower()
         if email:
             for c in self._contacts:
                 existing_email = (c.get("contact_data", {}).get("email") or "").strip().lower()
-                if existing_email == email:
-                    # Update existing instead of duplicating
-                    c["contact_data"] = contact_data
-                    c["source_file"] = source_file or c.get("source_file", "")
-                    c["vcf_content"] = vcf_content or c.get("vcf_content", "")
-                    c["card_id"] = card_id or c.get("card_id", "")
-                    c["updated_at"] = datetime.now().isoformat()
-                    self._save()
-                    return c["id"]
+                if existing_email != email:
+                    continue
 
+                if c.get("locked", False):
+                    # LOCKED — additive merge + conflict report.
+                    result = self._merge_or_conflict(c.get("contact_data") or {}, contact_data)
+                    if result["additions"]:
+                        cd = c.setdefault("contact_data", {})
+                        for k, v in result["additions"].items():
+                            cd[k] = v
+                        # Regenerate VCF from the merged data so exports
+                        # include the new fields.
+                        try:
+                            from utils.vcf_generator import VCFGenerator
+
+                            c["vcf_content"] = VCFGenerator().generate_vcf_string(cd)
+                        except Exception:
+                            pass
+                        c["updated_at"] = datetime.now().isoformat()
+                        self._save()
+                    return {
+                        "id": c["id"],
+                        "status": "conflict" if result["conflicts"] else "merged",
+                        "additions": result["additions"],
+                        "conflicts": result["conflicts"],
+                        "locked": True,
+                    }
+
+                # UNLOCKED — overwrite (legacy behaviour, refreshes on rescan).
+                c["contact_data"] = contact_data
+                c["source_file"] = source_file or c.get("source_file", "")
+                c["vcf_content"] = vcf_content or c.get("vcf_content", "")
+                c["card_id"] = card_id or c.get("card_id", "")
+                c["updated_at"] = datetime.now().isoformat()
+                self._save()
+                return {
+                    "id": c["id"],
+                    "status": "updated",
+                    "additions": {},
+                    "conflicts": [],
+                    "locked": False,
+                }
+
+        # No match — create a new entry. Default to unlocked.
         contact_id = str(uuid.uuid4())[:8]
         entry = {
             "id": contact_id,
@@ -86,12 +187,29 @@ class ContactsRepository:
             "contact_data": contact_data,
             "source_file": source_file,
             "vcf_content": vcf_content,
+            "locked": False,
             "added_at": datetime.now().isoformat(),
             "updated_at": datetime.now().isoformat(),
         }
         self._contacts.append(entry)
         self._save()
-        return contact_id
+        return {
+            "id": contact_id,
+            "status": "added",
+            "additions": {},
+            "conflicts": [],
+            "locked": False,
+        }
+
+    def set_locked(self, contact_id: str, locked: bool) -> bool:
+        """Toggle the lock flag on a contact. Returns True on success."""
+        for c in self._contacts:
+            if c.get("id") == contact_id:
+                c["locked"] = bool(locked)
+                c["updated_at"] = datetime.now().isoformat()
+                self._save()
+                return True
+        return False
 
     def remove_contact(self, contact_id: str) -> bool:
         """Remove a contact by its UUID. Returns True if found and removed."""
@@ -111,6 +229,7 @@ class ContactsRepository:
                 # Regenerate VCF content if needed
                 try:
                     from utils.vcf_generator import VCFGenerator
+
                     vcf_gen = VCFGenerator()
                     contact["vcf_content"] = vcf_gen.generate_vcf_string(contact_data)
                 except:
@@ -129,13 +248,11 @@ class ContactsRepository:
 
     def get_all(self) -> List[Dict]:
         """Return all contacts (newest first)."""
-        return sorted(self._contacts,
-                       key=lambda c: c.get("added_at", ""),
-                       reverse=True)
+        return sorted(self._contacts, key=lambda c: c.get("added_at", ""), reverse=True)
 
     def fingerprint(self) -> str:
         """Cheap hash of current state — changes whenever contacts change."""
-        return f"{len(self._contacts)}:{sum(hash(c.get('id','')) for c in self._contacts)}"
+        return f"{len(self._contacts)}:{sum(hash(c.get('id', '')) for c in self._contacts)}"
 
     def count(self) -> int:
         return len(self._contacts)
@@ -159,10 +276,7 @@ class ContactsRepository:
         sorted_groups = {}
         for key in sorted(groups.keys(), key=lambda k: (k == "(No company)", k.lower())):
             # Sort contacts within each group by name
-            sorted_groups[key] = sorted(
-                groups[key],
-                key=lambda c: _display_name(c).lower()
-            )
+            sorted_groups[key] = sorted(groups[key], key=lambda c: _display_name(c).lower())
         return sorted_groups
 
     # ── Search ─────────────────────────────────────────────────────────────
@@ -176,16 +290,18 @@ class ContactsRepository:
         results = []
         for c in self._contacts:
             cd = c.get("contact_data", {})
-            searchable = " ".join([
-                cd.get("firstName", "") or "",
-                cd.get("lastName", "") or "",
-                cd.get("fullName", "") or "",
-                cd.get("email", "") or "",
-                cd.get("company", "") or "",
-                cd.get("phone", "") or "",
-                cd.get("mobile", "") or "",
-                cd.get("title", "") or "",
-            ]).lower()
+            searchable = " ".join(
+                [
+                    cd.get("firstName", "") or "",
+                    cd.get("lastName", "") or "",
+                    cd.get("fullName", "") or "",
+                    cd.get("email", "") or "",
+                    cd.get("company", "") or "",
+                    cd.get("phone", "") or "",
+                    cd.get("mobile", "") or "",
+                    cd.get("title", "") or "",
+                ]
+            ).lower()
             if q in searchable:
                 results.append(c)
         return results
@@ -204,14 +320,17 @@ class ContactsRepository:
 
     def get_all_vcf(self, contact_ids: Optional[List[str]] = None) -> str:
         """Return concatenated VCF for all (or selected) contacts."""
-        entries = self._contacts if contact_ids is None else [
-            c for c in self._contacts if c["id"] in set(contact_ids)
-        ]
+        entries = (
+            self._contacts
+            if contact_ids is None
+            else [c for c in self._contacts if c["id"] in set(contact_ids)]
+        )
         vcfs = [c.get("vcf_content", "") for c in entries if c.get("vcf_content")]
         return "\r\n".join(vcfs)
 
 
 # ── Helpers ────────────────────────────────────────────────────────────────
+
 
 def _display_name(contact_entry: Dict) -> str:
     """Extract a display name from a repository entry."""

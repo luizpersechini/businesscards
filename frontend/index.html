@@ -3279,6 +3279,23 @@
           });
         };
 
+        // Tally conflict/merge/update statistics across this run's cards.
+        // Each card has repoStatus = added|updated|merged|conflict and
+        // optional additions{} / conflicts[].
+        const conflictCards = cards.filter(
+          (c) => c.repoStatus === "conflict" && (c.conflicts || []).length > 0,
+        );
+        const mergedCards = cards.filter(
+          (c) =>
+            (c.repoStatus === "merged" || c.repoStatus === "conflict") &&
+            Object.keys(c.additions || {}).length > 0,
+        );
+        const totalConflicts = conflictCards.reduce(
+          (n, c) => n + (c.conflicts || []).length,
+          0,
+        );
+        const [showConflicts, setShowConflicts] = useState(false);
+
         return (
           <div
             style={{
@@ -3288,6 +3305,167 @@
               height: "100%",
             }}
           >
+            {/* Conflict / merge summary banner. Only renders when this
+                scan touched a locked existing contact. */}
+            {(conflictCards.length > 0 || mergedCards.length > 0) && (
+              <div
+                style={{
+                  background:
+                    conflictCards.length > 0
+                      ? "var(--warning-soft)"
+                      : "var(--accent-soft)",
+                  border:
+                    "1px solid " +
+                    (conflictCards.length > 0
+                      ? "oklch(88% 0.06 60)"
+                      : "oklch(85% 0.08 264)"),
+                  borderRadius: 8,
+                  padding: "10px 14px",
+                  fontSize: 12,
+                }}
+              >
+                <div
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 8,
+                    fontWeight: 600,
+                  }}
+                >
+                  <Icons.lock
+                    color={
+                      conflictCards.length > 0
+                        ? "var(--warning)"
+                        : "var(--accent)"
+                    }
+                  />
+                  <span>
+                    {mergedCards.length > 0 && (
+                      <>
+                        Added fields to {mergedCards.length} locked contact
+                        {mergedCards.length !== 1 ? "s" : ""}.{" "}
+                      </>
+                    )}
+                    {conflictCards.length > 0 && (
+                      <>
+                        {totalConflicts} field conflict
+                        {totalConflicts !== 1 ? "s" : ""} on{" "}
+                        {conflictCards.length} locked contact
+                        {conflictCards.length !== 1 ? "s" : ""} — review below.
+                      </>
+                    )}
+                  </span>
+                  <div style={{ flex: 1 }} />
+                  {conflictCards.length > 0 && (
+                    <button
+                      onClick={() => setShowConflicts((v) => !v)}
+                      style={{
+                        background: "transparent",
+                        border: "1px solid var(--warning)",
+                        color: "var(--warning)",
+                        cursor: "pointer",
+                        fontSize: 11,
+                        fontWeight: 500,
+                        padding: "3px 10px",
+                        borderRadius: 5,
+                        fontFamily: "inherit",
+                      }}
+                    >
+                      {showConflicts ? "Hide details" : "Show details"}
+                    </button>
+                  )}
+                </div>
+                {showConflicts && conflictCards.length > 0 && (
+                  <div
+                    style={{
+                      marginTop: 10,
+                      display: "flex",
+                      flexDirection: "column",
+                      gap: 8,
+                    }}
+                  >
+                    {conflictCards.map((c, i) => (
+                      <div
+                        key={i}
+                        style={{
+                          background: "var(--surface)",
+                          border: "1px solid var(--border)",
+                          borderRadius: 6,
+                          padding: "8px 12px",
+                        }}
+                      >
+                        <div
+                          style={{
+                            fontWeight: 600,
+                            fontSize: 12,
+                            marginBottom: 4,
+                          }}
+                        >
+                          {c.contact.fullName ||
+                            c.contact.email ||
+                            c.filename ||
+                            "(unnamed)"}
+                        </div>
+                        {(c.conflicts || []).map((cf, j) => (
+                          <div
+                            key={j}
+                            style={{
+                              fontSize: 11,
+                              color: "var(--text-secondary)",
+                              lineHeight: 1.6,
+                            }}
+                          >
+                            <strong>{cf.field}:</strong> existing{" "}
+                            <code
+                              style={{
+                                background: "var(--bg)",
+                                padding: "1px 5px",
+                                borderRadius: 3,
+                              }}
+                            >
+                              {String(cf.existing)}
+                            </code>{" "}
+                            vs new{" "}
+                            <code
+                              style={{
+                                background: "var(--bg)",
+                                padding: "1px 5px",
+                                borderRadius: 3,
+                              }}
+                            >
+                              {String(cf.incoming)}
+                            </code>
+                          </div>
+                        ))}
+                        {Object.keys(c.additions || {}).length > 0 && (
+                          <div
+                            style={{
+                              fontSize: 11,
+                              color: "var(--success)",
+                              marginTop: 4,
+                            }}
+                          >
+                            ✓ Added: {Object.keys(c.additions).join(", ")}
+                          </div>
+                        )}
+                        <div
+                          style={{
+                            fontSize: 11,
+                            color: "var(--text-tertiary)",
+                            marginTop: 6,
+                          }}
+                        >
+                          To resolve: open the Contacts tab, find this contact,
+                          click Edit, and update the value you want to keep. Or
+                          unlock the contact to allow the new scan to overwrite.
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+
             {/* Results toolbar */}
             <div
               style={{
@@ -3741,10 +3919,40 @@
           setWarnings([]);
         };
 
-        const handleToggleLock = (id) => {
+        const handleToggleLock = async (id) => {
+          // Optimistic flip
+          let targetRepoId = null;
+          let newLocked = false;
           setCards((prev) =>
-            prev.map((c) => (c.id === id ? { ...c, locked: !c.locked } : c)),
+            prev.map((c) => {
+              if (c.id === id) {
+                targetRepoId = c.repoId;
+                newLocked = !c.locked;
+                return { ...c, locked: newLocked };
+              }
+              return c;
+            }),
           );
+          // Persist to repo if this card was saved (has a repoId)
+          if (targetRepoId) {
+            try {
+              const r = await fetch("/api/contacts/" + targetRepoId + "/lock", {
+                method: "PUT",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ locked: newLocked }),
+              });
+              if (!r.ok) throw new Error("HTTP " + r.status);
+            } catch (err) {
+              console.error("[lock toggle] failed:", err);
+              // Roll back
+              setCards((prev) =>
+                prev.map((c) =>
+                  c.id === id ? { ...c, locked: !newLocked } : c,
+                ),
+              );
+              alert("Could not change lock state: " + err.message);
+            }
+          }
         };
 
         return (
@@ -4892,6 +5100,7 @@
         onSelect,
         onDelete,
         onEdit,
+        onToggleLock,
         expanded,
         onToggleExpand,
       }) {
@@ -5089,6 +5298,38 @@
                     <Icons.edit color="currentColor" />
                   </button>
                 )}
+                {onToggleLock && (
+                  <button
+                    onClick={onToggleLock}
+                    title={
+                      c.locked
+                        ? "Locked — future scans cannot overwrite. Click to unlock."
+                        : "Click to lock. Locked contacts only merge in new fields; conflicting values are flagged."
+                    }
+                    style={{
+                      background: "none",
+                      border: "none",
+                      cursor: "pointer",
+                      color: c.locked
+                        ? "var(--accent)"
+                        : "var(--text-tertiary)",
+                      padding: 4,
+                      display: "flex",
+                      alignItems: "center",
+                      borderRadius: 4,
+                    }}
+                    onMouseEnter={(e) => {
+                      if (!c.locked)
+                        e.currentTarget.style.color = "var(--accent)";
+                    }}
+                    onMouseLeave={(e) => {
+                      if (!c.locked)
+                        e.currentTarget.style.color = "var(--text-tertiary)";
+                    }}
+                  >
+                    <Icons.lock color="currentColor" />
+                  </button>
+                )}
                 <button
                   onClick={onDelete}
                   title="Delete contact"
@@ -5226,6 +5467,7 @@
         onSelect,
         onDelete,
         onEdit,
+        onToggleLock,
         expandedId,
         onToggleExpand,
       }) {
@@ -5329,6 +5571,9 @@
                     onSelect={() => onSelect(c.id)}
                     onDelete={() => onDelete(c.id)}
                     onEdit={onEdit ? () => onEdit(c) : undefined}
+                    onToggleLock={
+                      onToggleLock ? () => onToggleLock(c) : undefined
+                    }
                     expanded={expandedId === c.id}
                     onToggleExpand={() => onToggleExpand(c.id)}
                   />
@@ -5409,6 +5654,32 @@
         };
         const handleToggleExpand = (id) =>
           setExpandedId((prev) => (prev === id ? null : id));
+
+        // Toggle the persistent lock flag on a repo contact.
+        // Optimistic UI: flip locally first, then PUT to backend.
+        // If backend rejects, roll back the local state.
+        const handleToggleLock = async (contactRow) => {
+          const id = contactRow.id;
+          const newLocked = !contactRow.locked;
+          setContacts((prev) =>
+            prev.map((c) => (c.id === id ? { ...c, locked: newLocked } : c)),
+          );
+          try {
+            const r = await fetch("/api/contacts/" + id + "/lock", {
+              method: "PUT",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ locked: newLocked }),
+            });
+            if (!r.ok) throw new Error("HTTP " + r.status);
+          } catch (err) {
+            console.error("[lock toggle] failed:", err);
+            // Roll back
+            setContacts((prev) =>
+              prev.map((c) => (c.id === id ? { ...c, locked: !newLocked } : c)),
+            );
+            alert("Could not change lock state: " + err.message);
+          }
+        };
 
         const handleEdit = (c) => setEditingContact(c);
 
@@ -5750,6 +6021,7 @@
                     onSelect={toggleSelect}
                     onDelete={handleDelete}
                     onEdit={handleEdit}
+                    onToggleLock={handleToggleLock}
                     expandedId={expandedId}
                     onToggleExpand={handleToggleExpand}
                   />
@@ -5766,6 +6038,7 @@
                       onSelect={() => toggleSelect(c.id)}
                       onDelete={() => handleDelete(c.id)}
                       onEdit={() => handleEdit(c)}
+                      onToggleLock={() => handleToggleLock(c)}
                       expanded={expandedId === c.id}
                       onToggleExpand={() => handleToggleExpand(c.id)}
                     />

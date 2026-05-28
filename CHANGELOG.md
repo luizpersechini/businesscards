@@ -2,6 +2,30 @@
 
 All notable changes to the Business Card Scanner project will be documented in this file.
 
+## [2.1.5] — 2026-05-27
+
+### Added
+
+- **Persistent per-contact lock** in the contacts repository. Lock a contact (click the padlock icon next to Edit/Delete in the Contacts tab, or in the scan-result card view) to mark it as "the version of truth". Locked contacts survive future scans intact — see the new merge-or-conflict rule below.
+- **Merge-or-conflict on re-scan of locked contacts.** When a new scan extracts a card whose email matches an existing **locked** repo contact:
+  - **Additive fields** — any field the existing contact didn't have (e.g. phone, mobile, address) is merged in silently, and the VCF is regenerated to include them.
+  - **Conflicting fields** — any field where existing and incoming disagree is recorded as a conflict and reported back to the UI. The existing value is preserved; nothing is overwritten.
+- **Conflict-resolution banner** in the scan results panel. If any scanned card touched a locked existing contact:
+  - Shows "Added fields to N locked contact(s)" for purely additive merges.
+  - Shows "N field conflicts on M locked contact(s) — review below" with a **Show details** toggle that lists each conflict (`field: existing X vs new Y`) and what was added. Includes instructions on how to resolve (edit the saved contact, or unlock to allow overwrite).
+- **`PUT /api/contacts/{id}/lock`** endpoint. Body: `{"locked": true|false}`.
+
+### Changed
+
+- `ContactsRepository.add_contact()` now returns a dict `{id, status, additions, conflicts, locked}` instead of just the contact id. `status` is one of `added`, `updated` (unlocked overwrite), `merged` (locked, additive only), `conflict` (locked, some values disagree). All callers in `server.py` updated; the public API responses now include `status`, `additions`, and `conflicts` where relevant.
+- Unlocked contacts still follow the legacy "rescan overwrites" behaviour, so you can deliberately refresh extracted data by leaving a card unlocked.
+
+### Documented
+
+- `_MERGEABLE_FIELDS` is the canonical list of fields that participate in the merge-or-conflict comparison: `firstName`, `lastName`, `fullName`, `title`, `company`, `email`, `phone`, `mobile`, `website`, `linkedin`, `address`, `city`, `state`, `zip`, `country`, `notes`. Comparison normalises whitespace and case, so `"Acme Corp"` and `"acme  corp"` don't trip a conflict.
+
+---
+
 ## [2.1.4] — 2026-05-26
 
 ### Improved

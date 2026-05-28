@@ -416,7 +416,11 @@ def _contact_data_to_frontend(
         "id": idx + 1,
         "cardId": card_id,
         "filename": card.get("filename", f"card_{idx + 1}.vcf"),
-        "locked": False,
+        "locked": bool(card.get("_locked", False)),
+        "repoId": card.get("_repo_id", ""),
+        "repoStatus": card.get("_repo_status", ""),  # added|updated|merged|conflict
+        "additions": card.get("_additions") or {},
+        "conflicts": card.get("_conflicts") or [],
         "source": source_file,
         "via": via,
         "time": round(processing_time, 1),
@@ -1006,7 +1010,7 @@ async def _scan_generator(
                     continue
                 card_id = f"{run_id}_{idx}"
                 card["_card_id"] = card_id
-                await loop.run_in_executor(
+                add_result = await loop.run_in_executor(
                     None,
                     lambda c=card, cid=card_id: _contacts.add_contact(
                         contact_data=c.get("contact_data", {}),
@@ -1014,6 +1018,17 @@ async def _scan_generator(
                         card_id=cid,
                     ),
                 )
+                # Attach merge / conflict info to the card so the frontend
+                # can show a banner. add_contact returns:
+                #   {id, status: added|updated|merged|conflict,
+                #    additions, conflicts, locked}
+                card["_repo_status"] = add_result.get("status", "added")
+                card["_repo_id"] = add_result.get("id", "")
+                card["_locked"] = add_result.get("locked", False)
+                if add_result.get("additions"):
+                    card["_additions"] = add_result["additions"]
+                if add_result.get("conflicts"):
+                    card["_conflicts"] = add_result["conflicts"]
         except Exception as hist_err:
             # History persistence failure is non-fatal for the user-facing scan,
             # but we log it so silent breakage doesn't hide bugs.
@@ -1496,6 +1511,7 @@ def _contact_to_api(entry: dict) -> dict:
         "source": entry.get("source_file", ""),
         "vcf": True,
         "thumbnail": has_thumbnail,
+        "locked": bool(entry.get("locked", False)),
         "contact": {
             "fullName": (
                 cd.get("fullName")
@@ -1561,20 +1577,41 @@ async def create_contact(contact_data: dict):
         if frontend_key in frontend_contact:
             repo_contact[repo_key] = frontend_contact[frontend_key]
 
-    # Add contact (add_contact handles duplicates by email)
-    contact_id = _contacts.add_contact(
+    # add_contact returns a dict: {id, status, additions, conflicts, locked}
+    add_result = _contacts.add_contact(
         contact_data=repo_contact,
         source_file=contact_data.get("source", ""),
         vcf_content=contact_data.get("vcfContent", ""),
     )
+    contact_id = add_result.get("id")
 
-    # Find the created/updated contact
     contacts = _contacts.get_all()
     created = next((c for c in contacts if c.get("id") == contact_id), None)
     if not created:
         raise HTTPException(status_code=500, detail="Failed to create contact")
 
-    return {"ok": True, "contact": _contact_to_api(created)}
+    return {
+        "ok": True,
+        "contact": _contact_to_api(created),
+        "status": add_result.get("status", "added"),
+        "additions": add_result.get("additions", {}),
+        "conflicts": add_result.get("conflicts", []),
+    }
+
+
+@app.put("/api/contacts/{contact_id}/lock")
+async def set_contact_lock(contact_id: str, payload: dict):
+    """Toggle lock status on a contact. Body: {"locked": true|false}.
+    A locked contact will not be overwritten by future scans — only
+    additive fields are merged and conflicts are surfaced."""
+    locked = bool(payload.get("locked", True))
+    if not _contacts.set_locked(contact_id, locked):
+        raise HTTPException(status_code=404, detail="Contact not found")
+    contacts = _contacts.get_all()
+    updated = next((c for c in contacts if c.get("id") == contact_id), None)
+    if not updated:
+        raise HTTPException(status_code=404, detail="Contact not found after update")
+    return {"ok": True, "contact": _contact_to_api(updated)}
 
 
 @app.put("/api/contacts/{contact_id}")
