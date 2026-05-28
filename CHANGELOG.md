@@ -2,6 +2,22 @@
 
 All notable changes to the Business Card Scanner project will be documented in this file.
 
+## [2.1.8] — 2026-05-27
+
+### Added
+
+- **"Relaunch with different model" picker** on every History tab run card. The Relaunch action is now a split button:
+  - Main button: relaunches with the original saved settings (same as 2.1.6 behaviour).
+  - Chevron dropdown: lists every model `/api/status` reports as installed locally — pick one and the relaunch runs with that model instead of the original. The model that matches the original is highlighted with a check mark.
+  - Useful for A/B'ing extraction quality on a known-input scan ("did Claude beat GLM-OCR on this card layout?") without re-uploading anything.
+
+### Internal
+
+- `HistoryTab` fetches `/api/status.models` once on mount and de-duplicates Ollama tag suffixes (`:latest`, `:13b`, …) for a cleaner picker.
+- `handleRelaunch(runId, options)` accepts an optional `{model}` (and any other backend-supported override). Passed as the JSON body of `POST /api/history/{run_id}/relaunch`, which already supported per-call overrides from 2.1.6.
+
+---
+
 ## [2.1.7] — 2026-05-27
 
 ### Added

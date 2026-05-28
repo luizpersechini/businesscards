@@ -6355,9 +6355,27 @@
         expanded,
         onToggle,
         onRelaunch,
+        availableModels,
         onDelete,
         onZip,
       }) {
+        // Tracks whether the "Relaunch with…" model-picker flyout is open
+        // for THIS card. Click-outside dismisses it.
+        const [modelMenuOpen, setModelMenuOpen] = useState(false);
+        const modelMenuRef = useRef(null);
+        useEffect(() => {
+          if (!modelMenuOpen) return;
+          const close = (e) => {
+            if (
+              modelMenuRef.current &&
+              !modelMenuRef.current.contains(e.target)
+            ) {
+              setModelMenuOpen(false);
+            }
+          };
+          window.addEventListener("mousedown", close);
+          return () => window.removeEventListener("mousedown", close);
+        }, [modelMenuOpen]);
         const dt = new Date(run.createdAt);
         const dateStr = dt.toLocaleDateString("en-GB", {
           day: "2-digit",
@@ -6508,17 +6526,206 @@
                   <div
                     style={{ display: "flex", gap: 6, alignItems: "center" }}
                   >
-                    <Btn
-                      size="sm"
-                      variant="secondary"
-                      icon={Icons.refresh}
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        onRelaunch(run.id);
-                      }}
+                    {/* Relaunch split-button: main = same model, chevron = pick model */}
+                    <div
+                      ref={modelMenuRef}
+                      style={{ position: "relative", display: "flex" }}
                     >
-                      Relaunch
-                    </Btn>
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setModelMenuOpen(false);
+                          onRelaunch(run.id);
+                        }}
+                        title={`Relaunch with same model (${run.settings.vision_model || "saved"})`}
+                        style={{
+                          display: "inline-flex",
+                          alignItems: "center",
+                          gap: 6,
+                          padding: "5px 10px",
+                          background: "var(--surface)",
+                          color: "var(--text-primary)",
+                          border: "1px solid var(--border)",
+                          borderRight: "none",
+                          borderRadius: "5px 0 0 5px",
+                          fontSize: 12,
+                          fontFamily: "inherit",
+                          fontWeight: 500,
+                          cursor: "pointer",
+                        }}
+                      >
+                        <Icons.refresh
+                          width={13}
+                          height={13}
+                          color="currentColor"
+                        />
+                        Relaunch
+                      </button>
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setModelMenuOpen((v) => !v);
+                        }}
+                        title="Relaunch with a different model"
+                        style={{
+                          display: "inline-flex",
+                          alignItems: "center",
+                          padding: "5px 8px",
+                          background: modelMenuOpen
+                            ? "var(--accent-soft)"
+                            : "var(--surface)",
+                          color: modelMenuOpen
+                            ? "var(--accent)"
+                            : "var(--text-secondary)",
+                          border: "1px solid var(--border)",
+                          borderRadius: "0 5px 5px 0",
+                          fontSize: 12,
+                          fontFamily: "inherit",
+                          cursor: "pointer",
+                        }}
+                      >
+                        <Icons.chevronDown
+                          color="currentColor"
+                          style={{
+                            transform: modelMenuOpen
+                              ? "rotate(180deg)"
+                              : "rotate(0)",
+                            transition: "transform 0.15s",
+                          }}
+                        />
+                      </button>
+                      {modelMenuOpen && (
+                        <div
+                          onClick={(e) => e.stopPropagation()}
+                          style={{
+                            position: "absolute",
+                            top: "calc(100% + 4px)",
+                            right: 0,
+                            zIndex: 30,
+                            minWidth: 200,
+                            background: "var(--surface)",
+                            border: "1px solid var(--border-strong)",
+                            borderRadius: 7,
+                            boxShadow: "var(--shadow-md)",
+                            padding: "4px",
+                            display: "flex",
+                            flexDirection: "column",
+                            gap: 1,
+                          }}
+                        >
+                          <div
+                            style={{
+                              fontSize: 10,
+                              fontWeight: 600,
+                              color: "var(--text-tertiary)",
+                              textTransform: "uppercase",
+                              letterSpacing: "0.06em",
+                              padding: "6px 10px 4px",
+                            }}
+                          >
+                            Relaunch with model
+                          </div>
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setModelMenuOpen(false);
+                              onRelaunch(run.id);
+                            }}
+                            style={{
+                              textAlign: "left",
+                              padding: "6px 10px",
+                              border: "none",
+                              background: "transparent",
+                              color: "var(--text-primary)",
+                              fontSize: 12,
+                              fontFamily: "inherit",
+                              cursor: "pointer",
+                              borderRadius: 5,
+                            }}
+                            onMouseEnter={(e) =>
+                              (e.currentTarget.style.background = "var(--bg)")
+                            }
+                            onMouseLeave={(e) =>
+                              (e.currentTarget.style.background = "transparent")
+                            }
+                          >
+                            Same as original{" "}
+                            <span style={{ color: "var(--text-tertiary)" }}>
+                              ({run.settings.vision_model || "saved"})
+                            </span>
+                          </button>
+                          <div
+                            style={{
+                              height: 1,
+                              background: "var(--border)",
+                              margin: "3px 6px",
+                            }}
+                          />
+                          {(availableModels || []).length === 0 ? (
+                            <div
+                              style={{
+                                padding: "6px 10px",
+                                fontSize: 11,
+                                color: "var(--text-tertiary)",
+                                fontStyle: "italic",
+                              }}
+                            >
+                              No models reported by /api/status
+                            </div>
+                          ) : (
+                            (availableModels || []).map((m) => (
+                              <button
+                                key={m}
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setModelMenuOpen(false);
+                                  onRelaunch(run.id, { model: m });
+                                }}
+                                style={{
+                                  textAlign: "left",
+                                  padding: "6px 10px",
+                                  border: "none",
+                                  background:
+                                    m === run.settings.vision_model
+                                      ? "var(--accent-soft)"
+                                      : "transparent",
+                                  color:
+                                    m === run.settings.vision_model
+                                      ? "var(--accent)"
+                                      : "var(--text-primary)",
+                                  fontSize: 12,
+                                  fontFamily: "inherit",
+                                  cursor: "pointer",
+                                  borderRadius: 5,
+                                  display: "flex",
+                                  alignItems: "center",
+                                  gap: 6,
+                                }}
+                                onMouseEnter={(e) => {
+                                  if (m !== run.settings.vision_model)
+                                    e.currentTarget.style.background =
+                                      "var(--bg)";
+                                }}
+                                onMouseLeave={(e) => {
+                                  if (m !== run.settings.vision_model)
+                                    e.currentTarget.style.background =
+                                      "transparent";
+                                }}
+                              >
+                                {m === run.settings.vision_model && (
+                                  <Icons.check
+                                    width={10}
+                                    height={10}
+                                    color="currentColor"
+                                  />
+                                )}
+                                {m}
+                              </button>
+                            ))
+                          )}
+                        </div>
+                      )}
+                    </div>
                     <Btn
                       size="sm"
                       variant="secondary"
@@ -6858,6 +7065,24 @@
           message: "",
         });
         const [filterModel, setFilterModel] = useState("all");
+        // Models available on this Ollama instance, used to populate the
+        // "Relaunch with…" model-picker flyout. Fetched once on mount.
+        const [availableModels, setAvailableModels] = useState([]);
+        useEffect(() => {
+          window
+            .apiGet("/api/status")
+            .then((s) => {
+              const raw = Array.isArray(s.models) ? s.models : [];
+              // Strip Ollama tag suffix (":latest", ":13b") for a cleaner list
+              const cleaned = Array.from(
+                new Set(
+                  raw.map((m) => (m || "").split(":")[0]).filter(Boolean),
+                ),
+              );
+              setAvailableModels(cleaned);
+            })
+            .catch(() => setAvailableModels([]));
+        }, []);
 
         // Load real history on mount
         useEffect(() => {
@@ -6889,19 +7114,24 @@
         // Re-run a past scan against its archived original files. Streams
         // progress via SSE just like a fresh scan. The new results land
         // as a separate history run; the original is left untouched.
-        const handleRelaunch = async (id) => {
+        // `options` is optional. Currently supported keys:
+        //   { model: "claude" | "openai" | "glm-ocr" | ... }
+        // Pass {} (or nothing) to re-run with the original saved settings.
+        const handleRelaunch = async (id, options = {}) => {
           if (relaunching) return; // ignore double-clicks while one is in-flight
           setRelaunching(id);
           setRelaunchProgress({
             stage: "warmup",
             progress: 0,
-            message: "Starting…",
+            message: options.model
+              ? `Starting (model: ${options.model})…`
+              : "Starting…",
           });
           try {
             const response = await fetch("/api/history/" + id + "/relaunch", {
               method: "POST",
               headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({}), // use saved settings
+              body: JSON.stringify(options || {}),
             });
             if (!response.ok) {
               const detail = await response.text().catch(() => "");
@@ -7308,6 +7538,7 @@
                             )
                           }
                           onRelaunch={handleRelaunch}
+                          availableModels={availableModels}
                           onDelete={handleDelete}
                           onZip={handleZip}
                         />
