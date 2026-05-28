@@ -6955,6 +6955,119 @@
                             >
                               Repo impact (this relaunch)
                             </div>
+                            {/* Bad-relaunch warning. Triggers when over
+                                half the cards conflict with locked
+                                contacts — strong signal the model
+                                produced wrong fields (e.g. names landing
+                                in title). User can delete the run
+                                inline; nothing was overwritten because
+                                locked contacts always reject. */}
+                            {(() => {
+                              const total = relaunchCards.length;
+                              const ratio =
+                                total > 0 ? tally.conflict / total : 0;
+                              if (ratio < 0.5) return null;
+                              return (
+                                <div
+                                  style={{
+                                    background: "var(--danger-soft)",
+                                    border: "1px solid oklch(85% 0.08 25)",
+                                    borderRadius: 6,
+                                    padding: "10px 12px",
+                                    marginBottom: 10,
+                                    fontSize: 12,
+                                    display: "flex",
+                                    alignItems: "flex-start",
+                                    gap: 10,
+                                  }}
+                                >
+                                  <div style={{ flex: 1 }}>
+                                    <div
+                                      style={{
+                                        fontWeight: 700,
+                                        color: "var(--danger)",
+                                        marginBottom: 4,
+                                      }}
+                                    >
+                                      Suspicious relaunch — {tally.conflict}/
+                                      {total} cards conflicted
+                                    </div>
+                                    <div
+                                      style={{
+                                        fontSize: 11,
+                                        color: "var(--text-secondary)",
+                                        lineHeight: 1.5,
+                                      }}
+                                    >
+                                      This model likely emitted bad field
+                                      assignments (e.g. names in the title
+                                      field). Your locked contacts{" "}
+                                      <strong>were not overwritten</strong> —
+                                      the conflict log shows what was rejected.
+                                      You can safely delete this run.
+                                      {run.settings.vision_model &&
+                                        ![
+                                          "glm-ocr",
+                                          "qwen2.5vl",
+                                          "qwen3-vl",
+                                          "minicpm-v",
+                                          "internvl3.5",
+                                          "olmocr",
+                                        ].some((m) =>
+                                          (
+                                            run.settings.vision_model || ""
+                                          ).includes(m),
+                                        ) && (
+                                          <>
+                                            {" "}
+                                            Model used:{" "}
+                                            <code>
+                                              {run.settings.vision_model}
+                                            </code>
+                                            . Consider a vision-OCR-tuned model
+                                            (glm-ocr, qwen2.5vl, minicpm-v)
+                                            instead.
+                                          </>
+                                        )}
+                                    </div>
+                                  </div>
+                                  <button
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      if (
+                                        confirm(
+                                          `Delete run ${run.id}? The contacts repo is unchanged (locked contacts protected your data) — this just removes the run from history.`,
+                                        )
+                                      ) {
+                                        onDelete(run.id);
+                                      }
+                                    }}
+                                    style={{
+                                      display: "inline-flex",
+                                      alignItems: "center",
+                                      gap: 5,
+                                      padding: "5px 12px",
+                                      background: "var(--danger)",
+                                      color: "white",
+                                      border: "none",
+                                      borderRadius: 5,
+                                      fontSize: 12,
+                                      fontFamily: "inherit",
+                                      fontWeight: 500,
+                                      cursor: "pointer",
+                                      flexShrink: 0,
+                                    }}
+                                  >
+                                    <Icons.trash
+                                      color="currentColor"
+                                      width={12}
+                                      height={12}
+                                    />
+                                    Delete run
+                                  </button>
+                                </div>
+                              );
+                            })()}
                             <div
                               style={{
                                 display: "flex",

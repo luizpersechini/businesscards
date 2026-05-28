@@ -2,6 +2,21 @@
 
 All notable changes to the Business Card Scanner project will be documented in this file.
 
+## [2.1.13] — 2026-05-28
+
+### Added
+
+- **"Suspicious relaunch" red banner** in the History tab when a relaunch's conflict ratio exceeds 50 % of cards (typical signature of a model that confabulated badly — names in the title field, addresses in the company field, etc.). Includes:
+  - A one-line explanation that locked contacts blocked the bad values (your data is safe).
+  - A **"Delete run" button** right inside the banner — click → confirm → run is gone from history with no further action needed.
+  - When the offending model wasn't one of the known-good vision-OCR models (`glm-ocr`, `qwen2.5vl`, `qwen3-vl`, `minicpm-v`, `internvl3.5`, `olmocr`), the banner names the model used and suggests trying a vision-tuned one instead.
+
+### Notes
+
+- The 50 % threshold is heuristic — a healthy relaunch on a non-changed image should produce 0 conflicts (everything matches the stored values). Anything that flips half the locked contacts is almost certainly a model issue, not the data being genuinely different.
+
+---
+
 ## [2.1.12] — 2026-05-28
 
 ### Fixed
