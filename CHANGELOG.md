@@ -2,6 +2,96 @@
 
 All notable changes to the Business Card Scanner project will be documented in this file.
 
+## [2.1.19] — 2026-05-28
+
+### Fixed
+
+- **Title-as-name demotion no longer blanks real names that collide with a role word.** The 2.1.15 heuristic demoted on _any_ strong token (`CEO`, `Director`, `Diretor`, …) regardless of context, so a person legitimately named "Mike Director" or "Anna Presidente" would have their name silently wiped. The strong-token shortcut now only fires when **every** token in the string is a role token (which still covers "CEO", "Vice President", "Sales Director"). Mixed strings fall through to the density rule (≥2 role tokens and ≥50 % role density), so "Mike Director" / "Daniel Sales" / "Patricia Marketing" are correctly left alone.
+
+### Added
+
+- **Regression test** `tests/test_providers.py::TestTitleDemotion` — 26 cases covering unambiguous titles (EN/PT), surname collisions, honorific vetoes, and the demotion side-effects (empty-title move, existing-title preservation, first/last clearing, None-safety). Run: `pytest tests/test_providers.py::TestTitleDemotion`.
+
+---
+
+## [2.1.18] — 2026-05-28
+
+### Changed
+
+- **Contacts tab now shows the actual cropped card thumbnail** in place of the coloured initials avatar. Falls back to the old initials chip if the contact has no `cardId`, no archived thumbnail, or the image 404s. Avatar bumped to 44 × 44 so the thumb is actually legible. New `<ContactThumb>` component encapsulates the load + fallback logic.
+- **Click-to-magnify.** Clicking the thumbnail opens a full-size lightbox (95 vw × 95 vh, dark backdrop, blur). Esc or click-outside dismisses; body scroll locks while open. `stopPropagation` on the thumb click so it doesn't also select the row.
+- **Thumbnail quality bumped 7× (200 px → 1400 px on the long edge, JPEG q=85 → q=92).** The old 200 px thumb was fine as a list-row avatar but pixelated badly when magnified. New size is ~170 kB on average — still small enough to load instantly in the list, sharp enough to read every line of the card when expanded. Optimised JPEG encoding so file size doesn't balloon.
+- **One-shot regen** of all 953 existing thumbnails from the archived `temp/history/*/cards/*/preview.png` sources, using the new size/quality settings.
+- **Thumbnail HTTP endpoint now uses ETag revalidation** (keyed on file mtime) with `max-age=60, must-revalidate`. The browser auto-fetches the new high-res thumb after a regen instead of serving a stale 200 px copy from cache for an hour. Out-of-band file changes also invalidate the in-memory cache via the same mtime check.
+
+---
+
+## [2.1.17] — 2026-05-28
+
+### Fixed
+
+- **Edits to cards in the Scanner tab silently corrupted the saved contact.** The `POST /api/contacts` and `PUT /api/contacts/{id}` endpoints were translating frontend camelCase keys into snake_case (`fullName` → `full_name`) and dropping every field not in their hand-maintained `field_map` (firstName, lastName, notes, city/state/zip/country). The repository's canonical schema is camelCase — `_MERGEABLE_FIELDS`, the VCFGenerator, and the merge-or-conflict logic all key on `fullName`/`firstName`/etc. Net effect of an edit: VCF regeneration produced a nameless vCard; firstName/lastName/notes/city/state/zip/country got wiped; future rescan-merges treated all camelCase fields as missing and created phantom additions.
+- Both endpoints now pass frontend camelCase through unchanged, filter against an explicit allowlist, and **PUT merges instead of replacing** (uses `apply_field_updates` so fields the Edit modal doesn't expose are preserved).
+- **One-shot migration** of `temp/contacts_repository.json`: 61/79 contacts had snake-case keys mixed in from prior edits. All were rewritten to camelCase canonical form and VCFs regenerated. Backup written to `temp/contacts_repository.backup_<timestamp>.json`.
+
+---
+
+## [2.1.16] — 2026-05-28
+
+### Added
+
+- **Vision-model catalogue with speed / quality ranks** in `frontend/index.html` (`VISION_MODELS`). Every model gets a 1-5 speed score, a 1-5 quality score, a short blurb, and a tooltip. The Settings model picker is now driven from this catalogue — pills show an inline `S{speed}/Q{quality}` badge and the selected model's blurb appears underneath. Catalogue order (best speed-quality balance for business-card OCR first):
+  1. `glm-ocr` — S5/Q4 — OCR-specialised, fastest, ~2 GB. Default for clean Latin-text cards.
+  2. `qwen2.5vl:7b` — S3/Q5 — strongest general multilingual vision, 5.7 GB. Best on complex layouts.
+  3. `minicpm-v` — S3/Q4 — balanced multilingual VLM, 5.2 GB. Often better on Asian text.
+  4. `moondream` — S5/Q3 — tiny + fast, 1.7 GB. Use when low-resource.
+  5. `llava:latest` — S3/Q3 — older fallback, 4.5 GB.
+  6. `claude-3` — S2/Q5 — cloud, highest quality, costs per call.
+- **History-tab relaunch picker** now sorts installed models by the catalogue (recommended first, unknowns alphabetically at the end) and shows the same `S/Q` badge next to each entry. So `qwen2.5vl` and `glm-ocr` float to the top instead of being lost in alphabetical order.
+
+### Removed
+
+- Dead model options from the Settings picker that weren't installed on this machine (`llama3.2-vision`, `llava:13b`). The catalogue lists what's actually pullable + useful.
+
+---
+
+## [2.1.15] — 2026-05-28
+
+### Changed
+
+- **Locked contacts now fully protect name + email.** Stated invariant: "locked means I checked it and I'm OK with most of it — never change name and email." `firstName`, `lastName`, `fullName`, and `email` are added to `_LOCKED_PROTECTED_FIELDS` in `ContactsRepository`. On a locked contact:
+  - If existing has a value for any of these → incoming is silently dropped (no conflict surfaced, no resolver radio buttons, no chance of override).
+  - If existing is empty → incoming can populate (additive still works).
+  - Enforced at two layers: the merge logic in `_merge_or_conflict` filters them from the `conflicts` list; the `apply_field_updates` primitive (called by the `/resolve` endpoint) also refuses to overwrite them. Belt-and-suspenders so neither the rescan path nor a hand-crafted API call can flip a protected field.
+
+### Fixed
+
+- **Job titles being emitted as the person's name.** Vision models routinely latch onto the largest text block on a card (often the role) and emit it as `fullName`. New `demote_title_misplaced_as_name(contact_dict)` helper detects role-like strings against a multilingual wordlist (EN / PT / ES / FR / DE / IT — 100+ tokens covering CEO/Diretor/Geschäftsführer/Direttore/etc.) and moves them to `title` (only if `title` is empty), clearing the name fields so a real name can still be pulled from elsewhere. Honorifics (Mr/Sra/Herr/etc.) veto the demotion. Strong tokens (CEO, Director, Diretor, Founder, Manager) trip the rule alone; weaker tokens need ≥50 % role density and ≥2 role hits. Applied at both vision and QR-only post-processing paths.
+
+---
+
+## [2.1.14] — 2026-05-28
+
+### Fixed
+
+- **Relaunch silently produced 0 cards for any archived run larger than 25 MB.** The validator on the scan generator capped uploads at 25 MB (`MAX_UPLOAD_BYTES`) to protect the upload endpoint. On the relaunch path the same cap was being re-applied to files coming from our own archive, so anything bigger (e.g. a 31 MB multi-page PDF) was rejected with a `warning` SSE event that the frontend never surfaced — the result was an empty new run with 0 files / 0 cards and no explanation. Now `_scan_generator(skip_size_check=True)` is passed on the relaunch path; the cap still applies to fresh uploads.
+- **Relaunch warnings are now visible.** The SSE consumer now collects `stage: "warning"` events and appends them to the post-run alert. When a relaunch produces 0 cards, the consumer surfaces the warnings (or a generic "the model may have failed" hint when there are none) instead of leaving the user staring at an empty run.
+
+### Changed
+
+- **Conflict resolution is now interactive.** Previously the conflict panel was informational — it told you which locked-contact fields had been kept and which incoming values were skipped, but offered no way to override the decision short of editing the contact manually. Now every conflict renders as two radio buttons (left = keep existing, right = use incoming) plus an **"Apply N changes" button**. Click Apply and the merge is persisted via a new `POST /api/contacts/{id}/resolve` endpoint, which regenerates the VCF so exports stay consistent.
+- Works in both surfaces:
+  - **Scanner tab** — per-card expanded conflict block.
+  - **History tab** — inline conflict panel on the newly-created run card after a Relaunch (each contact gets its own resolver, name-hinted).
+- Unsaved cards (no `repoId` yet) show the picker but the Apply button is disabled with a tooltip explaining you need to save the contact first.
+
+### Added
+
+- `ContactsRepository.apply_field_updates(contact_id, updates)` — partial-merge primitive that takes a `{field: value}` dict, applies it on top of the existing `contact_data`, regenerates the VCF, and saves. Pass `None`/`""` as a value to clear a field. Distinct from `update_contact`, which replaces the whole record.
+- New `<ConflictResolver>` React component, reused by both surfaces.
+
+---
+
 ## [2.1.13] — 2026-05-28
 
 ### Added

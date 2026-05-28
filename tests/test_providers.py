@@ -71,3 +71,83 @@ class TestProviderFallback:
         # Method should be callable
         assert hasattr(factory, 'extract_with_fallback')
         assert callable(factory.extract_with_fallback)
+
+
+class TestTitleDemotion:
+    """Tests for demote_title_misplaced_as_name / _looks_like_title.
+
+    Guards the heuristic that catches vision models emitting a job title
+    in the fullName field. The key invariant: never blank a real person's
+    name, even when their surname collides with a role word.
+    """
+
+    @pytest.mark.parametrize(
+        "value,expected",
+        [
+            # Unambiguous titles -> True
+            ("CEO", True),
+            ("Director", True),
+            ("Diretor", True),
+            ("Sales Manager", True),
+            ("Vice President", True),
+            ("VP of Sales", True),
+            ("Diretor Comercial", True),
+            ("Gerente de Vendas", True),
+            ("Sales Director", True),
+            ("Chief Technology Officer", True),
+            # Real names -> False (must NOT demote)
+            ("John Smith", False),
+            ("Mike Director", False),  # surname collides w/ strong token
+            ("Anna Presidente", False),
+            ("Daniel Sales", False),  # single weak hit
+            ("Maria Silva", False),
+            ("Dr. John Smith", False),  # honorific veto
+            ("Sra. Ana Costa", False),
+            ("Robert Lead", False),
+            ("Patricia Marketing", False),
+            ("", False),
+            (None, False),
+        ],
+    )
+    def test_looks_like_title(self, value, expected):
+        from utils.providers.base import _looks_like_title
+
+        assert _looks_like_title(value) is expected
+
+    def test_demote_moves_to_empty_title(self):
+        from utils.providers.base import demote_title_misplaced_as_name
+
+        cd = {"fullName": "Sales Manager", "title": "", "email": "a@b.com"}
+        demote_title_misplaced_as_name(cd)
+        assert cd["fullName"] is None
+        assert cd["title"] == "Sales Manager"
+
+    def test_demote_never_overwrites_existing_title(self):
+        from utils.providers.base import demote_title_misplaced_as_name
+
+        cd = {"fullName": "Sales Manager", "title": "Account Exec", "email": "a@b.com"}
+        demote_title_misplaced_as_name(cd)
+        assert cd["fullName"] is None
+        assert cd["title"] == "Account Exec"  # preserved
+
+    def test_demote_clears_first_last_when_concatenation_is_title(self):
+        from utils.providers.base import demote_title_misplaced_as_name
+
+        cd = {"firstName": "Sales", "lastName": "Manager", "fullName": None, "title": ""}
+        demote_title_misplaced_as_name(cd)
+        assert cd["firstName"] is None
+        assert cd["lastName"] is None
+        assert cd["title"] == "Sales Manager"
+
+    def test_demote_leaves_real_name_untouched(self):
+        from utils.providers.base import demote_title_misplaced_as_name
+
+        cd = {"fullName": "Mike Director", "title": "", "email": "m@b.com"}
+        demote_title_misplaced_as_name(cd)
+        assert cd["fullName"] == "Mike Director"
+        assert cd["title"] == ""
+
+    def test_demote_safe_on_none(self):
+        from utils.providers.base import demote_title_misplaced_as_name
+
+        assert demote_title_misplaced_as_name(None) is None

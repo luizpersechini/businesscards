@@ -911,97 +911,97 @@
       // ─────────────────────────────────────────────────────────────────────────────
 
       const __TWEAKS_STYLE = `
-  .twk-panel{position:fixed;right:16px;bottom:16px;z-index:2147483646;width:280px;
-    max-height:calc(100vh - 32px);display:flex;flex-direction:column;
-    background:rgba(250,249,247,.78);color:#29261b;
-    -webkit-backdrop-filter:blur(24px) saturate(160%);backdrop-filter:blur(24px) saturate(160%);
-    border:.5px solid rgba(255,255,255,.6);border-radius:14px;
-    box-shadow:0 1px 0 rgba(255,255,255,.5) inset,0 12px 40px rgba(0,0,0,.18);
-    font:11.5px/1.4 ui-sans-serif,system-ui,-apple-system,sans-serif;overflow:hidden}
-  .twk-hd{display:flex;align-items:center;justify-content:space-between;
-    padding:10px 8px 10px 14px;cursor:move;user-select:none}
-  .twk-hd b{font-size:12px;font-weight:600;letter-spacing:.01em}
-  .twk-x{appearance:none;border:0;background:transparent;color:rgba(41,38,27,.55);
-    width:22px;height:22px;border-radius:6px;cursor:default;font-size:13px;line-height:1}
-  .twk-x:hover{background:rgba(0,0,0,.06);color:#29261b}
-  .twk-body{padding:2px 14px 14px;display:flex;flex-direction:column;gap:10px;
-    overflow-y:auto;overflow-x:hidden;min-height:0;
-    scrollbar-width:thin;scrollbar-color:rgba(0,0,0,.15) transparent}
-  .twk-body::-webkit-scrollbar{width:8px}
-  .twk-body::-webkit-scrollbar-track{background:transparent;margin:2px}
-  .twk-body::-webkit-scrollbar-thumb{background:rgba(0,0,0,.15);border-radius:4px;
-    border:2px solid transparent;background-clip:content-box}
-  .twk-body::-webkit-scrollbar-thumb:hover{background:rgba(0,0,0,.25);
-    border:2px solid transparent;background-clip:content-box}
-  .twk-row{display:flex;flex-direction:column;gap:5px}
-  .twk-row-h{flex-direction:row;align-items:center;justify-content:space-between;gap:10px}
-  .twk-lbl{display:flex;justify-content:space-between;align-items:baseline;
-    color:rgba(41,38,27,.72)}
-  .twk-lbl>span:first-child{font-weight:500}
-  .twk-val{color:rgba(41,38,27,.5);font-variant-numeric:tabular-nums}
+        .twk-panel{position:fixed;right:16px;bottom:16px;z-index:2147483646;width:280px;
+          max-height:calc(100vh - 32px);display:flex;flex-direction:column;
+          background:rgba(250,249,247,.78);color:#29261b;
+          -webkit-backdrop-filter:blur(24px) saturate(160%);backdrop-filter:blur(24px) saturate(160%);
+          border:.5px solid rgba(255,255,255,.6);border-radius:14px;
+          box-shadow:0 1px 0 rgba(255,255,255,.5) inset,0 12px 40px rgba(0,0,0,.18);
+          font:11.5px/1.4 ui-sans-serif,system-ui,-apple-system,sans-serif;overflow:hidden}
+        .twk-hd{display:flex;align-items:center;justify-content:space-between;
+          padding:10px 8px 10px 14px;cursor:move;user-select:none}
+        .twk-hd b{font-size:12px;font-weight:600;letter-spacing:.01em}
+        .twk-x{appearance:none;border:0;background:transparent;color:rgba(41,38,27,.55);
+          width:22px;height:22px;border-radius:6px;cursor:default;font-size:13px;line-height:1}
+        .twk-x:hover{background:rgba(0,0,0,.06);color:#29261b}
+        .twk-body{padding:2px 14px 14px;display:flex;flex-direction:column;gap:10px;
+          overflow-y:auto;overflow-x:hidden;min-height:0;
+          scrollbar-width:thin;scrollbar-color:rgba(0,0,0,.15) transparent}
+        .twk-body::-webkit-scrollbar{width:8px}
+        .twk-body::-webkit-scrollbar-track{background:transparent;margin:2px}
+        .twk-body::-webkit-scrollbar-thumb{background:rgba(0,0,0,.15);border-radius:4px;
+          border:2px solid transparent;background-clip:content-box}
+        .twk-body::-webkit-scrollbar-thumb:hover{background:rgba(0,0,0,.25);
+          border:2px solid transparent;background-clip:content-box}
+        .twk-row{display:flex;flex-direction:column;gap:5px}
+        .twk-row-h{flex-direction:row;align-items:center;justify-content:space-between;gap:10px}
+        .twk-lbl{display:flex;justify-content:space-between;align-items:baseline;
+          color:rgba(41,38,27,.72)}
+        .twk-lbl>span:first-child{font-weight:500}
+        .twk-val{color:rgba(41,38,27,.5);font-variant-numeric:tabular-nums}
 
-  .twk-sect{font-size:10px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;
-    color:rgba(41,38,27,.45);padding:10px 0 0}
-  .twk-sect:first-child{padding-top:0}
+        .twk-sect{font-size:10px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;
+          color:rgba(41,38,27,.45);padding:10px 0 0}
+        .twk-sect:first-child{padding-top:0}
 
-  .twk-field{appearance:none;width:100%;height:26px;padding:0 8px;
-    border:.5px solid rgba(0,0,0,.1);border-radius:7px;
-    background:rgba(255,255,255,.6);color:inherit;font:inherit;outline:none}
-  .twk-field:focus{border-color:rgba(0,0,0,.25);background:rgba(255,255,255,.85)}
-  select.twk-field{padding-right:22px;
-    background-image:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'><path fill='rgba(0,0,0,.5)' d='M0 0h10L5 6z'/></svg>");
-    background-repeat:no-repeat;background-position:right 8px center}
+        .twk-field{appearance:none;width:100%;height:26px;padding:0 8px;
+          border:.5px solid rgba(0,0,0,.1);border-radius:7px;
+          background:rgba(255,255,255,.6);color:inherit;font:inherit;outline:none}
+        .twk-field:focus{border-color:rgba(0,0,0,.25);background:rgba(255,255,255,.85)}
+        select.twk-field{padding-right:22px;
+          background-image:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'><path fill='rgba(0,0,0,.5)' d='M0 0h10L5 6z'/></svg>");
+          background-repeat:no-repeat;background-position:right 8px center}
 
-  .twk-slider{appearance:none;-webkit-appearance:none;width:100%;height:4px;margin:6px 0;
-    border-radius:999px;background:rgba(0,0,0,.12);outline:none}
-  .twk-slider::-webkit-slider-thumb{-webkit-appearance:none;appearance:none;
-    width:14px;height:14px;border-radius:50%;background:#fff;
-    border:.5px solid rgba(0,0,0,.12);box-shadow:0 1px 3px rgba(0,0,0,.2);cursor:default}
-  .twk-slider::-moz-range-thumb{width:14px;height:14px;border-radius:50%;
-    background:#fff;border:.5px solid rgba(0,0,0,.12);box-shadow:0 1px 3px rgba(0,0,0,.2);cursor:default}
+        .twk-slider{appearance:none;-webkit-appearance:none;width:100%;height:4px;margin:6px 0;
+          border-radius:999px;background:rgba(0,0,0,.12);outline:none}
+        .twk-slider::-webkit-slider-thumb{-webkit-appearance:none;appearance:none;
+          width:14px;height:14px;border-radius:50%;background:#fff;
+          border:.5px solid rgba(0,0,0,.12);box-shadow:0 1px 3px rgba(0,0,0,.2);cursor:default}
+        .twk-slider::-moz-range-thumb{width:14px;height:14px;border-radius:50%;
+          background:#fff;border:.5px solid rgba(0,0,0,.12);box-shadow:0 1px 3px rgba(0,0,0,.2);cursor:default}
 
-  .twk-seg{position:relative;display:flex;padding:2px;border-radius:8px;
-    background:rgba(0,0,0,.06);user-select:none}
-  .twk-seg-thumb{position:absolute;top:2px;bottom:2px;border-radius:6px;
-    background:rgba(255,255,255,.9);box-shadow:0 1px 2px rgba(0,0,0,.12);
-    transition:left .15s cubic-bezier(.3,.7,.4,1),width .15s}
-  .twk-seg.dragging .twk-seg-thumb{transition:none}
-  .twk-seg button{appearance:none;position:relative;z-index:1;flex:1;border:0;
-    background:transparent;color:inherit;font:inherit;font-weight:500;min-height:22px;
-    border-radius:6px;cursor:default;padding:4px 6px;line-height:1.2;
-    overflow-wrap:anywhere}
+        .twk-seg{position:relative;display:flex;padding:2px;border-radius:8px;
+          background:rgba(0,0,0,.06);user-select:none}
+        .twk-seg-thumb{position:absolute;top:2px;bottom:2px;border-radius:6px;
+          background:rgba(255,255,255,.9);box-shadow:0 1px 2px rgba(0,0,0,.12);
+          transition:left .15s cubic-bezier(.3,.7,.4,1),width .15s}
+        .twk-seg.dragging .twk-seg-thumb{transition:none}
+        .twk-seg button{appearance:none;position:relative;z-index:1;flex:1;border:0;
+          background:transparent;color:inherit;font:inherit;font-weight:500;min-height:22px;
+          border-radius:6px;cursor:default;padding:4px 6px;line-height:1.2;
+          overflow-wrap:anywhere}
 
-  .twk-toggle{position:relative;width:32px;height:18px;border:0;border-radius:999px;
-    background:rgba(0,0,0,.15);transition:background .15s;cursor:default;padding:0}
-  .twk-toggle[data-on="1"]{background:#34c759}
-  .twk-toggle i{position:absolute;top:2px;left:2px;width:14px;height:14px;border-radius:50%;
-    background:#fff;box-shadow:0 1px 2px rgba(0,0,0,.25);transition:transform .15s}
-  .twk-toggle[data-on="1"] i{transform:translateX(14px)}
+        .twk-toggle{position:relative;width:32px;height:18px;border:0;border-radius:999px;
+          background:rgba(0,0,0,.15);transition:background .15s;cursor:default;padding:0}
+        .twk-toggle[data-on="1"]{background:#34c759}
+        .twk-toggle i{position:absolute;top:2px;left:2px;width:14px;height:14px;border-radius:50%;
+          background:#fff;box-shadow:0 1px 2px rgba(0,0,0,.25);transition:transform .15s}
+        .twk-toggle[data-on="1"] i{transform:translateX(14px)}
 
-  .twk-num{display:flex;align-items:center;height:26px;padding:0 0 0 8px;
-    border:.5px solid rgba(0,0,0,.1);border-radius:7px;background:rgba(255,255,255,.6)}
-  .twk-num-lbl{font-weight:500;color:rgba(41,38,27,.6);cursor:ew-resize;
-    user-select:none;padding-right:8px}
-  .twk-num input{flex:1;min-width:0;height:100%;border:0;background:transparent;
-    font:inherit;font-variant-numeric:tabular-nums;text-align:right;padding:0 8px 0 0;
-    outline:none;color:inherit;-moz-appearance:textfield}
-  .twk-num input::-webkit-inner-spin-button,.twk-num input::-webkit-outer-spin-button{
-    -webkit-appearance:none;margin:0}
-  .twk-num-unit{padding-right:8px;color:rgba(41,38,27,.45)}
+        .twk-num{display:flex;align-items:center;height:26px;padding:0 0 0 8px;
+          border:.5px solid rgba(0,0,0,.1);border-radius:7px;background:rgba(255,255,255,.6)}
+        .twk-num-lbl{font-weight:500;color:rgba(41,38,27,.6);cursor:ew-resize;
+          user-select:none;padding-right:8px}
+        .twk-num input{flex:1;min-width:0;height:100%;border:0;background:transparent;
+          font:inherit;font-variant-numeric:tabular-nums;text-align:right;padding:0 8px 0 0;
+          outline:none;color:inherit;-moz-appearance:textfield}
+        .twk-num input::-webkit-inner-spin-button,.twk-num input::-webkit-outer-spin-button{
+          -webkit-appearance:none;margin:0}
+        .twk-num-unit{padding-right:8px;color:rgba(41,38,27,.45)}
 
-  .twk-btn{appearance:none;height:26px;padding:0 12px;border:0;border-radius:7px;
-    background:rgba(0,0,0,.78);color:#fff;font:inherit;font-weight:500;cursor:default}
-  .twk-btn:hover{background:rgba(0,0,0,.88)}
-  .twk-btn.secondary{background:rgba(0,0,0,.06);color:inherit}
-  .twk-btn.secondary:hover{background:rgba(0,0,0,.1)}
+        .twk-btn{appearance:none;height:26px;padding:0 12px;border:0;border-radius:7px;
+          background:rgba(0,0,0,.78);color:#fff;font:inherit;font-weight:500;cursor:default}
+        .twk-btn:hover{background:rgba(0,0,0,.88)}
+        .twk-btn.secondary{background:rgba(0,0,0,.06);color:inherit}
+        .twk-btn.secondary:hover{background:rgba(0,0,0,.1)}
 
-  .twk-swatch{appearance:none;-webkit-appearance:none;width:56px;height:22px;
-    border:.5px solid rgba(0,0,0,.1);border-radius:6px;padding:0;cursor:default;
-    background:transparent;flex-shrink:0}
-  .twk-swatch::-webkit-color-swatch-wrapper{padding:0}
-  .twk-swatch::-webkit-color-swatch{border:0;border-radius:5.5px}
-  .twk-swatch::-moz-color-swatch{border:0;border-radius:5.5px}
-`;
+        .twk-swatch{appearance:none;-webkit-appearance:none;width:56px;height:22px;
+          border:.5px solid rgba(0,0,0,.1);border-radius:6px;padding:0;cursor:default;
+          background:transparent;flex-shrink:0}
+        .twk-swatch::-webkit-color-swatch-wrapper{padding:0}
+        .twk-swatch::-webkit-color-swatch{border:0;border-radius:5.5px}
+        .twk-swatch::-moz-color-swatch{border:0;border-radius:5.5px}
+      `;
 
       // ── useTweaks ───────────────────────────────────────────────────────────────
       // Single source of truth for tweak values. setTweak persists via the host
@@ -1385,6 +1385,73 @@
       // SCANNER TAB
       // ═══════════════════════════════════════════════════════════
       // Scanner Tab Component
+
+      // ─── Vision model catalogue ───────────────────────────────────────────────────
+      // Ordered by best speed-quality balance for business-card OCR on an
+      // M-series Mac. `speed` and `quality` are 1-5 ranks (higher = better).
+      // The picker shows badges in the form `S{speed}/Q{quality}` next to
+      // each pill, plus a one-line blurb under the selected one.
+      const VISION_MODELS = [
+        {
+          id: "glm-ocr",
+          shortLabel: "GLM-OCR 0.9B",
+          speed: 5,
+          quality: 4,
+          blurb:
+            "OCR-specialised, ~2 GB. Best for clean cards with mostly Latin text — fastest in the lineup.",
+          tooltip: "Speed 5/5 · Quality 4/5 — fastest, OCR-tuned",
+        },
+        {
+          id: "qwen2.5vl:7b",
+          shortLabel: "Qwen2.5-VL 7B",
+          speed: 3,
+          quality: 5,
+          blurb:
+            "General multilingual vision, 5.7 GB. Strongest on complex layouts, multi-language cards, and mixed graphics + text.",
+          tooltip: "Speed 3/5 · Quality 5/5 — best general vision",
+        },
+        {
+          id: "minicpm-v",
+          shortLabel: "MiniCPM-V 4.6 8B",
+          speed: 3,
+          quality: 4,
+          blurb:
+            "Balanced multilingual VLM, 5.2 GB. Solid alternative to Qwen2.5-VL — often better on Asian text.",
+          tooltip: "Speed 3/5 · Quality 4/5 — balanced multilingual",
+        },
+        {
+          id: "moondream",
+          shortLabel: "Moondream 1.6B",
+          speed: 5,
+          quality: 3,
+          blurb:
+            "Tiny vision model, 1.7 GB. Use when you need fast on low-resource conditions and the card is simple.",
+          tooltip: "Speed 5/5 · Quality 3/5 — tiny + fast",
+        },
+        {
+          id: "llava:latest",
+          shortLabel: "LLaVA 7B",
+          speed: 3,
+          quality: 3,
+          blurb:
+            "Older general VLM, 4.5 GB. Reliable fallback but newer models usually beat it. Keep as a sanity check.",
+          tooltip: "Speed 3/5 · Quality 3/5 — fallback",
+        },
+        {
+          id: "claude-3",
+          shortLabel: "Claude (cloud)",
+          speed: 2,
+          quality: 5,
+          blurb:
+            "Cloud fallback via Anthropic API — highest quality but slow + costs per call. Requires ANTHROPIC_API_KEY.",
+          tooltip: "Speed 2/5 · Quality 5/5 — cloud, costs $",
+        },
+      ];
+
+      // Tiny inline badge like "S5/Q4" — feeds into the model picker chip.
+      function modelBadge(m) {
+        return `S${m.speed}/Q${m.quality}`;
+      }
 
       // ─── Mock data ────────────────────────────────────────────────────────────────
       const MOCK_RESULTS = [
@@ -1795,65 +1862,74 @@
                     Vision Model
                   </label>
                   <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-                    {[
-                      "glm-ocr",
-                      "llama3.2-vision",
-                      "llava:13b",
-                      "claude-3",
-                    ].map((m) => (
+                    {VISION_MODELS.map((mdl) => (
                       <button
-                        key={m}
-                        onClick={() => onChange({ ...config, model: m })}
+                        key={mdl.id}
+                        onClick={() => onChange({ ...config, model: mdl.id })}
+                        title={mdl.tooltip}
                         style={{
                           padding: "5px 10px",
                           borderRadius: 99,
                           fontSize: 12,
                           border: "1px solid",
                           borderColor:
-                            config.model === m
+                            config.model === mdl.id
                               ? "var(--accent)"
                               : "var(--border)",
                           background:
-                            config.model === m
+                            config.model === mdl.id
                               ? "var(--accent-soft)"
                               : "var(--bg)",
                           color:
-                            config.model === m
+                            config.model === mdl.id
                               ? "var(--accent)"
                               : "var(--text-secondary)",
                           fontFamily: "inherit",
                           cursor: "pointer",
-                          fontWeight: config.model === m ? 500 : 400,
+                          fontWeight: config.model === mdl.id ? 500 : 400,
                           transition: "all 0.15s",
+                          display: "inline-flex",
+                          alignItems: "center",
+                          gap: 5,
                         }}
                       >
-                        {m === "glm-ocr" && (
-                          <Icons.bolt
-                            color="currentColor"
-                            width={10}
-                            height={10}
-                            style={{ marginRight: 3, display: "inline" }}
-                          />
-                        )}
-                        {m}
+                        {mdl.id}
+                        <span
+                          style={{
+                            fontSize: 9,
+                            color:
+                              config.model === mdl.id
+                                ? "var(--accent)"
+                                : "var(--text-tertiary)",
+                            fontWeight: 500,
+                            letterSpacing: 0.4,
+                          }}
+                          aria-hidden
+                        >
+                          {modelBadge(mdl)}
+                        </span>
                       </button>
                     ))}
                   </div>
-                  {config.model === "glm-ocr" && (
-                    <div
-                      style={{
-                        marginTop: 6,
-                        fontSize: 11,
-                        color: "var(--success)",
-                        display: "flex",
-                        alignItems: "center",
-                        gap: 4,
-                      }}
-                    >
-                      <Icons.bolt color="currentColor" width={10} height={10} />
-                      0.9B params — fastest, #1 OCR benchmark
-                    </div>
-                  )}
+                  {(() => {
+                    const m = VISION_MODELS.find((x) => x.id === config.model);
+                    if (!m) return null;
+                    return (
+                      <div
+                        style={{
+                          marginTop: 6,
+                          fontSize: 11,
+                          color: "var(--text-secondary)",
+                          lineHeight: 1.4,
+                        }}
+                      >
+                        <strong style={{ color: "var(--text-primary)" }}>
+                          {m.shortLabel}
+                        </strong>{" "}
+                        — {m.blurb}
+                      </div>
+                    );
+                  })()}
                 </div>
 
                 {/* Detection Mode */}
@@ -2808,6 +2884,199 @@
         );
       }
 
+      // ─── Conflict Resolver ────────────────────────────────────────────────────────
+      // Interactive per-field picker for locked-contact conflicts. Lets the
+      // user choose existing vs incoming for each field and POSTs the merged
+      // updates to /api/contacts/{repoId}/resolve. `nameHint` shows above the
+      // list when used in a multi-contact context (History run card).
+      function ConflictResolver({ repoId, conflicts, nameHint, onResolved }) {
+        const initial = React.useMemo(() => {
+          const m = {};
+          (conflicts || []).forEach((cf) => {
+            m[cf.field] = "existing";
+          });
+          return m;
+        }, [conflicts]);
+        const [choices, setChoices] = useState(initial);
+        const [busy, setBusy] = useState(false);
+        const [done, setDone] = useState(false);
+
+        if (!conflicts || conflicts.length === 0) return null;
+
+        const changedCount = Object.keys(choices).filter(
+          (k) => choices[k] === "incoming",
+        ).length;
+
+        const handleApply = async () => {
+          if (!repoId) {
+            alert(
+              "Can't apply — this card hasn't been saved to the contacts repository yet.",
+            );
+            return;
+          }
+          const updates = {};
+          conflicts.forEach((cf) => {
+            if (choices[cf.field] === "incoming") {
+              updates[cf.field] = cf.incoming;
+            }
+          });
+          if (Object.keys(updates).length === 0) {
+            setDone(true);
+            return;
+          }
+          setBusy(true);
+          try {
+            const r = await fetch("/api/contacts/" + repoId + "/resolve", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ updates }),
+            });
+            if (!r.ok) throw new Error("HTTP " + r.status);
+            const data = await r.json();
+            setDone(true);
+            onResolved && onResolved(data.contact);
+          } catch (err) {
+            console.error("[resolve] failed:", err);
+            alert("Failed to apply changes: " + err.message);
+          } finally {
+            setBusy(false);
+          }
+        };
+
+        if (done) {
+          return (
+            <div
+              style={{
+                fontSize: 11,
+                color: "var(--success)",
+                fontStyle: "italic",
+                padding: "4px 0",
+              }}
+            >
+              ✓ Conflicts resolved
+              {nameHint ? ` for ${nameHint}` : ""}.
+            </div>
+          );
+        }
+
+        const radioOpt = (field, side, value) => (
+          <label
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: 6,
+              cursor: "pointer",
+              padding: "2px 6px",
+              borderRadius: 4,
+              background:
+                choices[field] === side ? "var(--accent-soft)" : "transparent",
+              border:
+                choices[field] === side
+                  ? "1px solid var(--accent)"
+                  : "1px solid transparent",
+              flex: 1,
+              minWidth: 0,
+            }}
+          >
+            <input
+              type="radio"
+              name={`${repoId || "unsaved"}::${field}`}
+              checked={choices[field] === side}
+              onChange={() =>
+                setChoices((prev) => ({ ...prev, [field]: side }))
+              }
+              style={{ margin: 0, flexShrink: 0 }}
+            />
+            <code
+              style={{
+                background: "var(--bg)",
+                padding: "1px 5px",
+                borderRadius: 3,
+                fontSize: 10,
+                overflow: "hidden",
+                textOverflow: "ellipsis",
+                whiteSpace: "nowrap",
+              }}
+              title={String(value)}
+            >
+              {String(value) || "(empty)"}
+            </code>
+          </label>
+        );
+
+        return (
+          <div>
+            {nameHint && (
+              <div style={{ fontWeight: 600, marginBottom: 4, fontSize: 11 }}>
+                {nameHint}
+              </div>
+            )}
+            {conflicts.map((cf, k) => (
+              <div
+                key={k}
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 8,
+                  marginBottom: 5,
+                  fontSize: 11,
+                  lineHeight: 1.4,
+                }}
+              >
+                <strong
+                  style={{
+                    minWidth: 70,
+                    color: "var(--text-primary)",
+                    flexShrink: 0,
+                  }}
+                >
+                  {cf.field}:
+                </strong>
+                {radioOpt(cf.field, "existing", cf.existing)}
+                {radioOpt(cf.field, "incoming", cf.incoming)}
+              </div>
+            ))}
+            <div
+              style={{
+                display: "flex",
+                gap: 8,
+                alignItems: "center",
+                marginTop: 8,
+              }}
+            >
+              <button
+                onClick={handleApply}
+                disabled={busy || !repoId}
+                style={{
+                  padding: "5px 12px",
+                  fontSize: 11,
+                  fontWeight: 600,
+                  background: busy || !repoId ? "var(--bg)" : "var(--accent)",
+                  color: busy || !repoId ? "var(--text-tertiary)" : "white",
+                  border: "1px solid var(--accent)",
+                  borderRadius: 4,
+                  cursor: busy || !repoId ? "not-allowed" : "pointer",
+                }}
+                title={
+                  !repoId
+                    ? "Save the contact first to enable conflict resolution"
+                    : ""
+                }
+              >
+                {busy
+                  ? "Applying…"
+                  : changedCount === 0
+                    ? "Keep all existing"
+                    : `Apply ${changedCount} change${changedCount !== 1 ? "s" : ""}`}
+              </button>
+              <span style={{ fontSize: 10, color: "var(--text-tertiary)" }}>
+                left = keep existing · right = use incoming
+              </span>
+            </div>
+          </div>
+        );
+      }
+
       // ─── Contact Card (Result) ─────────────────────────────────────────────────────
       function ContactCard({ card, onToggleLock, onSave, onEdit }) {
         const [expanded, setExpanded] = useState(false);
@@ -2965,10 +3234,10 @@
                       />
                     )}
                     {/* Per-card repo-status badge. Surfaces conflict /
-                        merged outcomes right on the card itself, so the
-                        user spots them without scrolling to the top
-                        banner. Only shows when the card touched an
-                        existing repo entry. */}
+                              merged outcomes right on the card itself, so the
+                              user spots them without scrolling to the top
+                              banner. Only shows when the card touched an
+                              existing repo entry. */}
                     {card.repoStatus === "conflict" && (
                       <Badge
                         label={`${(card.conflicts || []).length} conflict${(card.conflicts || []).length !== 1 ? "s" : ""}`}
@@ -3099,42 +3368,12 @@
                         marginBottom: 6,
                       }}
                     >
-                      Field conflicts (locked contact)
+                      Field conflicts (locked contact) — pick what to keep
                     </div>
-                    {(card.conflicts || []).map((cf, k) => (
-                      <div
-                        key={k}
-                        style={{
-                          fontSize: 11,
-                          marginBottom: 4,
-                          lineHeight: 1.5,
-                        }}
-                      >
-                        <strong style={{ color: "var(--text-primary)" }}>
-                          {cf.field}:
-                        </strong>{" "}
-                        kept{" "}
-                        <code
-                          style={{
-                            background: "var(--bg)",
-                            padding: "1px 5px",
-                            borderRadius: 3,
-                          }}
-                        >
-                          {String(cf.existing)}
-                        </code>{" "}
-                        · skipped{" "}
-                        <code
-                          style={{
-                            background: "var(--bg)",
-                            padding: "1px 5px",
-                            borderRadius: 3,
-                          }}
-                        >
-                          {String(cf.incoming)}
-                        </code>
-                      </div>
-                    ))}
+                    <ConflictResolver
+                      repoId={card.repoId}
+                      conflicts={card.conflicts}
+                    />
                   </div>
                 )}
                 {Object.keys(card.additions || {}).length > 0 && (
@@ -3441,7 +3680,7 @@
             }}
           >
             {/* Conflict / merge summary banner. Only renders when this
-                scan touched a locked existing contact. */}
+                      scan touched a locked existing contact. */}
             {(conflictCards.length > 0 || mergedCards.length > 0) && (
               <div
                 style={{
@@ -3541,59 +3780,21 @@
                             c.filename ||
                             "(unnamed)"}
                         </div>
-                        {(c.conflicts || []).map((cf, j) => (
-                          <div
-                            key={j}
-                            style={{
-                              fontSize: 11,
-                              color: "var(--text-secondary)",
-                              lineHeight: 1.6,
-                            }}
-                          >
-                            <strong>{cf.field}:</strong> existing{" "}
-                            <code
-                              style={{
-                                background: "var(--bg)",
-                                padding: "1px 5px",
-                                borderRadius: 3,
-                              }}
-                            >
-                              {String(cf.existing)}
-                            </code>{" "}
-                            vs new{" "}
-                            <code
-                              style={{
-                                background: "var(--bg)",
-                                padding: "1px 5px",
-                                borderRadius: 3,
-                              }}
-                            >
-                              {String(cf.incoming)}
-                            </code>
-                          </div>
-                        ))}
+                        <ConflictResolver
+                          repoId={c.repoId}
+                          conflicts={c.conflicts || []}
+                        />
                         {Object.keys(c.additions || {}).length > 0 && (
                           <div
                             style={{
                               fontSize: 11,
                               color: "var(--success)",
-                              marginTop: 4,
+                              marginTop: 6,
                             }}
                           >
                             ✓ Added: {Object.keys(c.additions).join(", ")}
                           </div>
                         )}
-                        <div
-                          style={{
-                            fontSize: 11,
-                            color: "var(--text-tertiary)",
-                            marginTop: 6,
-                          }}
-                        >
-                          To resolve: open the Contacts tab, find this contact,
-                          click Edit, and update the value you want to keep. Or
-                          unlock the contact to allow the new scan to overwrite.
-                        </div>
                       </div>
                     ))}
                   </div>
@@ -4489,8 +4690,8 @@
                   </div>
 
                   {/* Suggestion: when auto detector fell back to a uniform grid,
-                      it returns the inferred dims — offer 1-click switch to
-                      Grid mode with those rows/cols. */}
+                            it returns the inferred dims — offer 1-click switch to
+                            Grid mode with those rows/cols. */}
                   {config.mode === "auto" &&
                     previewData.previews[0]?.inferredGrid && (
                       <div
@@ -5229,6 +5430,133 @@
         );
       }
 
+      // Shared thumbnail avatar — shows the cropped card image when one
+      // exists in `/api/thumbnails/<cardId>`, falls back to coloured
+      // initials if the fetch 404s or no cardId is set. Click to open
+      // a full-size lightbox.
+      function ContactThumb({ cardId, hasThumb, initials, hue, size = 44 }) {
+        const [failed, setFailed] = useState(false);
+        const [zoom, setZoom] = useState(false);
+        const showImg = cardId && hasThumb && !failed;
+
+        const handleOpen = (e) => {
+          if (!showImg) return;
+          e.stopPropagation();
+          setZoom(true);
+        };
+
+        // Esc-to-close + body scroll lock while the lightbox is open.
+        useEffect(() => {
+          if (!zoom) return;
+          const onKey = (e) => {
+            if (e.key === "Escape") setZoom(false);
+          };
+          window.addEventListener("keydown", onKey);
+          const prevOverflow = document.body.style.overflow;
+          document.body.style.overflow = "hidden";
+          return () => {
+            window.removeEventListener("keydown", onKey);
+            document.body.style.overflow = prevOverflow;
+          };
+        }, [zoom]);
+
+        return (
+          <>
+            <div
+              onClick={handleOpen}
+              title={showImg ? "Click to enlarge" : undefined}
+              style={{
+                width: size,
+                height: size,
+                borderRadius: 8,
+                flexShrink: 0,
+                overflow: "hidden",
+                background: showImg ? "var(--bg)" : `oklch(65% 0.15 ${hue})`,
+                border: showImg ? "1px solid var(--border)" : "none",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                fontSize: Math.round(size * 0.36),
+                fontWeight: 700,
+                color: "white",
+                cursor: showImg ? "zoom-in" : "default",
+              }}
+            >
+              {showImg ? (
+                <img
+                  src={`/api/thumbnails/${cardId}`}
+                  alt=""
+                  onError={() => setFailed(true)}
+                  style={{
+                    width: "100%",
+                    height: "100%",
+                    objectFit: "cover",
+                    display: "block",
+                  }}
+                />
+              ) : (
+                initials
+              )}
+            </div>
+            {zoom && (
+              <div
+                onClick={() => setZoom(false)}
+                style={{
+                  position: "fixed",
+                  inset: 0,
+                  background: "rgba(0,0,0,0.82)",
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  zIndex: 20000,
+                  cursor: "zoom-out",
+                  backdropFilter: "blur(4px)",
+                  padding: 24,
+                }}
+              >
+                <img
+                  src={`/api/thumbnails/${cardId}`}
+                  alt=""
+                  onClick={(e) => e.stopPropagation()}
+                  style={{
+                    maxWidth: "95vw",
+                    maxHeight: "95vh",
+                    objectFit: "contain",
+                    boxShadow: "0 20px 60px rgba(0,0,0,0.5)",
+                    borderRadius: 8,
+                    cursor: "default",
+                  }}
+                />
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setZoom(false);
+                  }}
+                  aria-label="Close"
+                  style={{
+                    position: "absolute",
+                    top: 16,
+                    right: 16,
+                    width: 36,
+                    height: 36,
+                    borderRadius: "50%",
+                    border: "none",
+                    background: "rgba(255,255,255,0.15)",
+                    color: "white",
+                    fontSize: 22,
+                    lineHeight: 1,
+                    cursor: "pointer",
+                    fontFamily: "inherit",
+                  }}
+                >
+                  ×
+                </button>
+              </div>
+            )}
+          </>
+        );
+      }
+
       function ContactRow({
         contact: c,
         selected,
@@ -5301,24 +5629,14 @@
                 )}
               </div>
 
-              {/* Avatar */}
-              <div
-                style={{
-                  width: 34,
-                  height: 34,
-                  borderRadius: 8,
-                  flexShrink: 0,
-                  background: `oklch(65% 0.15 ${hue})`,
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "center",
-                  fontSize: 13,
-                  fontWeight: 700,
-                  color: "white",
-                }}
-              >
-                {initials}
-              </div>
+              {/* Avatar — cropped card thumbnail when available, initials otherwise. */}
+              <ContactThumb
+                cardId={c.cardId}
+                hasThumb={c.thumbnail}
+                initials={initials}
+                hue={hue}
+                size={44}
+              />
 
               {/* Name + details */}
               <div style={{ flex: 1, minWidth: 0 }}>
@@ -6809,55 +7127,97 @@
                               No models reported by /api/status
                             </div>
                           ) : (
-                            (availableModels || []).map((m) => (
-                              <button
-                                key={m}
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  setModelMenuOpen(false);
-                                  onRelaunch(run.id, { model: m });
-                                }}
-                                style={{
-                                  textAlign: "left",
-                                  padding: "6px 10px",
-                                  border: "none",
-                                  background:
-                                    m === run.settings.vision_model
-                                      ? "var(--accent-soft)"
-                                      : "transparent",
-                                  color:
-                                    m === run.settings.vision_model
-                                      ? "var(--accent)"
-                                      : "var(--text-primary)",
-                                  fontSize: 12,
-                                  fontFamily: "inherit",
-                                  cursor: "pointer",
-                                  borderRadius: 5,
-                                  display: "flex",
-                                  alignItems: "center",
-                                  gap: 6,
-                                }}
-                                onMouseEnter={(e) => {
-                                  if (m !== run.settings.vision_model)
-                                    e.currentTarget.style.background =
-                                      "var(--bg)";
-                                }}
-                                onMouseLeave={(e) => {
-                                  if (m !== run.settings.vision_model)
-                                    e.currentTarget.style.background =
-                                      "transparent";
-                                }}
-                              >
-                                {m === run.settings.vision_model && (
-                                  <Icons.check
-                                    width={10}
-                                    height={10}
-                                    color="currentColor"
-                                  />
-                                )}
-                                {m}
-                              </button>
-                            ))
+                            // Sort installed models by VISION_MODELS catalogue
+                            // order (known/recommended first), unknowns last
+                            // alphabetically. So qwen2.5vl and glm-ocr float
+                            // to the top and obscure third-party models sink.
+                            [...(availableModels || [])]
+                              .sort((a, b) => {
+                                const rank = (id) => {
+                                  const i = VISION_MODELS.findIndex(
+                                    (v) =>
+                                      v.id === id ||
+                                      id.startsWith(v.id) ||
+                                      v.id.startsWith(id),
+                                  );
+                                  return i === -1 ? 999 : i;
+                                };
+                                const ra = rank(a);
+                                const rb = rank(b);
+                                if (ra !== rb) return ra - rb;
+                                return a.localeCompare(b);
+                              })
+                              .map((m) => {
+                                const meta = VISION_MODELS.find(
+                                  (v) =>
+                                    v.id === m ||
+                                    m.startsWith(v.id) ||
+                                    v.id.startsWith(m),
+                                );
+                                return (
+                                  <button
+                                    key={m}
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      setModelMenuOpen(false);
+                                      onRelaunch(run.id, { model: m });
+                                    }}
+                                    style={{
+                                      textAlign: "left",
+                                      padding: "6px 10px",
+                                      border: "none",
+                                      background:
+                                        m === run.settings.vision_model
+                                          ? "var(--accent-soft)"
+                                          : "transparent",
+                                      color:
+                                        m === run.settings.vision_model
+                                          ? "var(--accent)"
+                                          : "var(--text-primary)",
+                                      fontSize: 12,
+                                      fontFamily: "inherit",
+                                      cursor: "pointer",
+                                      borderRadius: 5,
+                                      display: "flex",
+                                      alignItems: "center",
+                                      gap: 6,
+                                    }}
+                                    onMouseEnter={(e) => {
+                                      if (m !== run.settings.vision_model)
+                                        e.currentTarget.style.background =
+                                          "var(--bg)";
+                                    }}
+                                    onMouseLeave={(e) => {
+                                      if (m !== run.settings.vision_model)
+                                        e.currentTarget.style.background =
+                                          "transparent";
+                                    }}
+                                  >
+                                    {m === run.settings.vision_model && (
+                                      <Icons.check
+                                        width={10}
+                                        height={10}
+                                        color="currentColor"
+                                      />
+                                    )}
+                                    <span style={{ flex: 1 }}>{m}</span>
+                                    {meta && (
+                                      <span
+                                        style={{
+                                          fontSize: 9,
+                                          color: "var(--text-tertiary)",
+                                          fontWeight: 500,
+                                          letterSpacing: 0.4,
+                                          marginLeft: 6,
+                                        }}
+                                        title={meta.tooltip}
+                                      >
+                                        {modelBadge(meta)}
+                                      </span>
+                                    )}
+                                  </button>
+                                );
+                              })
                           )}
                         </div>
                       )}
@@ -6912,12 +7272,12 @@
                   <div className="fade-in">
                     <Divider />
                     {/* Post-relaunch repo-impact panel. Only rendered when
-                        we have the SSE 'done' card array cached for THIS
-                        run (i.e. it was just produced by a Relaunch).
-                        /api/history doesn't preserve repoStatus per card,
-                        so this only shows for the relaunch session that
-                        created the run; reloading the page loses it.
-                        Tally + per-card conflict/additions details. */}
+                              we have the SSE 'done' card array cached for THIS
+                              run (i.e. it was just produced by a Relaunch).
+                              /api/history doesn't preserve repoStatus per card,
+                              so this only shows for the relaunch session that
+                              created the run; reloading the page loses it.
+                              Tally + per-card conflict/additions details. */}
                     {relaunchCards &&
                       relaunchCards.length > 0 &&
                       (() => {
@@ -6956,12 +7316,12 @@
                               Repo impact (this relaunch)
                             </div>
                             {/* Bad-relaunch warning. Triggers when over
-                                half the cards conflict with locked
-                                contacts — strong signal the model
-                                produced wrong fields (e.g. names landing
-                                in title). User can delete the run
-                                inline; nothing was overwritten because
-                                locked contacts always reject. */}
+                                      half the cards conflict with locked
+                                      contacts — strong signal the model
+                                      produced wrong fields (e.g. names landing
+                                      in title). User can delete the run
+                                      inline; nothing was overwritten because
+                                      locked contacts always reject. */}
                             {(() => {
                               const total = relaunchCards.length;
                               const ratio =
@@ -7129,40 +7489,15 @@
                                       marginBottom: 4,
                                     }}
                                   >
-                                    <div
-                                      style={{
-                                        fontWeight: 600,
-                                        marginBottom: 3,
-                                      }}
-                                    >
-                                      {c.contact.fullName ||
+                                    <ConflictResolver
+                                      repoId={c.repoId}
+                                      conflicts={c.conflicts || []}
+                                      nameHint={
+                                        c.contact.fullName ||
                                         c.contact.email ||
-                                        "(unnamed)"}
-                                    </div>
-                                    {(c.conflicts || []).map((cf, j) => (
-                                      <div key={j} style={{ lineHeight: 1.5 }}>
-                                        <strong>{cf.field}:</strong> kept{" "}
-                                        <code
-                                          style={{
-                                            background: "var(--bg)",
-                                            padding: "1px 5px",
-                                            borderRadius: 3,
-                                          }}
-                                        >
-                                          {String(cf.existing)}
-                                        </code>{" "}
-                                        · skipped{" "}
-                                        <code
-                                          style={{
-                                            background: "var(--bg)",
-                                            padding: "1px 5px",
-                                            borderRadius: 3,
-                                          }}
-                                        >
-                                          {String(cf.incoming)}
-                                        </code>
-                                      </div>
-                                    ))}
+                                        "(unnamed)"
+                                      }
+                                    />
                                   </div>
                                 ))}
                                 <div
@@ -7172,9 +7507,8 @@
                                     color: "var(--text-tertiary)",
                                   }}
                                 >
-                                  Locked values were kept. To accept the new
-                                  value, edit the contact in the Contacts tab
-                                  (or unlock it and rescan).
+                                  Pick existing or incoming per field, then
+                                  Apply. Unsaved cards must be saved first.
                                 </div>
                               </div>
                             )}
@@ -7590,6 +7924,7 @@
             let done = false;
             let finalCards = null; // capture the 'done' event's card array
             let finalRunId = null; // capture the NEW run's id from the 'done' event
+            const warnings = []; // collect 'warning' SSE events (skipped files etc.)
             while (!done) {
               const r = await reader.read();
               if (r.done) break;
@@ -7614,6 +7949,9 @@
                   if (evt.stage === "stopped") {
                     done = true;
                     break;
+                  }
+                  if (evt.stage === "warning" && evt.message) {
+                    warnings.push(evt.message);
                   }
                   setRelaunchProgress({
                     stage: evt.stage,
@@ -7690,7 +8028,21 @@
                   `  contact in the Contacts tab.`,
                 );
               }
+              if (warnings.length > 0) {
+                lines.push("", "Warnings:", ...warnings.map((w) => `  • ${w}`));
+              }
               alert(lines.join("\n"));
+            } else if (warnings.length > 0) {
+              // 0 cards but the server told us why — surface it instead of
+              // letting the relaunch look like a silent no-op.
+              alert(
+                "Relaunch finished but produced 0 cards.\n\nWarnings:\n" +
+                  warnings.map((w) => `  • ${w}`).join("\n"),
+              );
+            } else if (!finalCards || finalCards.length === 0) {
+              alert(
+                "Relaunch finished but produced 0 cards. The model may have failed to extract anything from the archived originals — try a different model from the dropdown.",
+              );
             }
           } catch (err) {
             console.error("[relaunch] failed:", err);

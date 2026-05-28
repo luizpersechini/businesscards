@@ -20,7 +20,7 @@ import cv2
 import numpy as np
 import requests as _requests
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, StreamingResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from PIL import Image
 
@@ -131,14 +131,20 @@ _HEIF_BRANDS = {
 }
 
 
-def _validate_upload(filename: str, raw: bytes) -> Optional[str]:
-    """Return None if the upload is acceptable, else an error message string."""
+def _validate_upload(filename: str, raw: bytes, skip_size_check: bool = False) -> Optional[str]:
+    """Return None if the upload is acceptable, else an error message string.
+
+    `skip_size_check=True` is used by the relaunch path: those files came
+    from our own archive (already validated when first uploaded), so the
+    MAX_UPLOAD_BYTES cap — which exists to protect the upload endpoint
+    from arbitrary inbound traffic — doesn't apply.
+    """
     ext = os.path.splitext((filename or "").lower())[1]
     if ext not in _ALLOWED_UPLOAD_EXTS:
         return f"Unsupported file type {ext!r} (allowed: {sorted(_ALLOWED_UPLOAD_EXTS)})"
     if len(raw) == 0:
         return "Empty file"
-    if len(raw) > MAX_UPLOAD_BYTES:
+    if not skip_size_check and len(raw) > MAX_UPLOAD_BYTES:
         return f"File too large ({len(raw)} bytes > {MAX_UPLOAD_BYTES} limit)"
 
     head = raw[:32]
@@ -344,10 +350,14 @@ def _deskew_to_card_cluster(bgr: np.ndarray, min_area_ratio: float = 0.25) -> np
 
 
 def _create_thumbnail(
-    card_image: np.ndarray, max_size: Tuple[int, int] = (200, 200)
+    card_image: np.ndarray, max_size: Tuple[int, int] = (1400, 1400)
 ) -> Optional[bytes]:
     """
     Create a thumbnail from card image.
+
+    Sized for both list-row (44 × 44) and click-to-magnify lightbox use
+    (~95 vw). 1400 px on the long edge keeps the file under ~200 kB at
+    JPEG q=92 while looking sharp on a Retina display when magnified.
 
     Args:
         card_image: Card image in RGB format (numpy array)
@@ -363,12 +373,15 @@ def _create_thumbnail(
         # Convert numpy array to PIL Image
         pil_img = Image.fromarray(card_image)
 
-        # Create thumbnail (preserves aspect ratio)
-        pil_img.thumbnail(max_size, Image.Resampling.LANCZOS)
+        # Create thumbnail (preserves aspect ratio). Only downsample if
+        # the source is bigger than the cap — never upscale.
+        if max(pil_img.size) > max(max_size):
+            pil_img.thumbnail(max_size, Image.Resampling.LANCZOS)
 
-        # Convert to JPEG bytes
+        # Convert to JPEG bytes. Quality 92 = visually lossless for cards
+        # while still <200 kB at 1400 px on the long edge.
         img_byte_arr = io.BytesIO()
-        pil_img.save(img_byte_arr, format="JPEG", quality=85)
+        pil_img.save(img_byte_arr, format="JPEG", quality=92, optimize=True)
         return img_byte_arr.getvalue()
     except Exception as e:
         print(f"Error creating thumbnail: {e}")
@@ -750,6 +763,7 @@ async def _scan_generator(
     margin_left: float = 0.0,
     margin_right: float = 1.0,
     deskew: bool = False,
+    skip_size_check: bool = False,
 ):
     """Async generator that yields SSE events for the scan pipeline."""
     # Reset the cancel flag for this scan
@@ -798,7 +812,11 @@ async def _scan_generator(
 
             # Upload validation (size cap + extension + magic bytes) BEFORE
             # any bytes reach cv2.imdecode / fitz.open. Skip bad files.
-            _upload_err = _validate_upload(filename, raw)
+            # Relaunch path (`skip_size_check=True`) bypasses the size cap
+            # because the file already passed validation once and lives in
+            # our own archive — the cap is for protecting the upload
+            # endpoint from arbitrary inbound traffic, not for re-scans.
+            _upload_err = _validate_upload(filename, raw, skip_size_check=skip_size_check)
             if _upload_err:
                 yield _sse(
                     {
@@ -1562,26 +1580,29 @@ async def create_contact(contact_data: dict):
     if not contact_data.get("contact"):
         raise HTTPException(status_code=400, detail="Missing contact data")
 
-    # Convert frontend field names to repository format
+    # Pass camelCase through unchanged — the repository, VCFGenerator
+    # and merge logic all key on camelCase. Filter to an allowlist so
+    # we never persist junk fields from a misbehaving client.
     frontend_contact = contact_data["contact"]
-    repo_contact = {}
-
-    # Map field names
-    field_map = {
-        "fullName": "full_name",
-        "title": "title",
-        "company": "company",
-        "email": "email",
-        "phone": "phone",
-        "mobile": "mobile",
-        "website": "website",
-        "linkedin": "linkedin",
-        "address": "address",
+    allowed = {
+        "fullName",
+        "firstName",
+        "lastName",
+        "title",
+        "company",
+        "email",
+        "phone",
+        "mobile",
+        "website",
+        "linkedin",
+        "address",
+        "city",
+        "state",
+        "zip",
+        "country",
+        "notes",
     }
-
-    for frontend_key, repo_key in field_map.items():
-        if frontend_key in frontend_contact:
-            repo_contact[repo_key] = frontend_contact[frontend_key]
+    repo_contact = {k: v for k, v in frontend_contact.items() if k in allowed}
 
     # add_contact returns a dict: {id, status, additions, conflicts, locked}
     add_result = _contacts.add_contact(
@@ -1620,36 +1641,67 @@ async def set_contact_lock(contact_id: str, payload: dict):
     return {"ok": True, "contact": _contact_to_api(updated)}
 
 
+@app.post("/api/contacts/{contact_id}/resolve")
+async def resolve_contact_conflicts(contact_id: str, payload: dict):
+    """Apply partial field updates from the interactive conflict-resolution UI.
+
+    Body: {"updates": {"field": "value", ...}}
+    Pass None/"" as a value to clear a field. Returns the updated contact.
+    """
+    updates = payload.get("updates") or {}
+    if not isinstance(updates, dict) or not updates:
+        raise HTTPException(status_code=400, detail="No updates provided")
+    updated = _contacts.apply_field_updates(contact_id, updates)
+    if not updated:
+        raise HTTPException(status_code=404, detail="Contact not found")
+    return {"ok": True, "contact": _contact_to_api(updated)}
+
+
 @app.put("/api/contacts/{contact_id}")
 async def update_contact(contact_id: str, contact_data: dict):
-    """Update an existing contact."""
-    # Validate required fields
+    """Update an existing contact.
+
+    Uses a partial-merge against the existing record (via
+    `apply_field_updates`) so fields the Edit modal doesn't expose
+    — firstName, lastName, notes, city, state, zip, country — are
+    preserved instead of being silently wiped.
+
+    Frontend sends camelCase keys; the repository's canonical schema
+    is also camelCase (`_MERGEABLE_FIELDS`, VCFGenerator, merge logic
+    all key on `fullName`/`firstName`/etc.). No translation needed.
+    """
     if not contact_data.get("contact"):
         raise HTTPException(status_code=400, detail="Missing contact data")
 
-    # Convert frontend field names to repository format
     frontend_contact = contact_data["contact"]
-    repo_contact = {}
 
-    # Map field names
-    field_map = {
-        "fullName": "full_name",
-        "title": "title",
-        "company": "company",
-        "email": "email",
-        "phone": "phone",
-        "mobile": "mobile",
-        "website": "website",
-        "linkedin": "linkedin",
-        "address": "address",
+    # Allowlist of fields that the Edit modal can write. Pass through
+    # with original camelCase keys. Anything else stays untouched on
+    # the stored record.
+    allowed = {
+        "fullName",
+        "firstName",
+        "lastName",
+        "title",
+        "company",
+        "email",
+        "phone",
+        "mobile",
+        "website",
+        "linkedin",
+        "address",
+        "city",
+        "state",
+        "zip",
+        "country",
+        "notes",
     }
+    updates = {k: v for k, v in frontend_contact.items() if k in allowed}
 
-    for frontend_key, repo_key in field_map.items():
-        if frontend_key in frontend_contact:
-            repo_contact[repo_key] = frontend_contact[frontend_key]
+    if not updates:
+        raise HTTPException(status_code=400, detail="No valid fields to update")
 
-    # Update contact
-    updated = _contacts.update_contact(contact_id, repo_contact)
+    updated = _contacts.apply_field_updates(contact_id, updates)
     if not updated:
         raise HTTPException(status_code=404, detail="Contact not found")
 
@@ -2012,6 +2064,7 @@ async def relaunch_history(run_id: str, request: Request):
             ml,
             mr,
             deskew,
+            skip_size_check=True,
         ),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
@@ -2024,30 +2077,55 @@ async def relaunch_history(run_id: str, request: Request):
 
 
 @app.get("/api/thumbnails/{card_id}")
-async def get_thumbnail(card_id: str):
-    """Get thumbnail image for a card."""
+async def get_thumbnail(card_id: str, request: Request):
+    """Get thumbnail image for a card.
+
+    Cache strategy: emit an ETag built from the on-disk mtime so that
+    re-rendered thumbnails (e.g. after a quality-bump migration)
+    invalidate the browser cache automatically — no hard-reload needed.
+    """
     # Path-traversal guard: validate card_id and resolve a contained path.
     thumb_path = _safe_thumb_path(card_id)
 
+    # Pull the on-disk mtime for ETag generation, if the file exists.
+    try:
+        mtime = os.path.getmtime(thumb_path) if os.path.exists(thumb_path) else 0
+    except OSError:
+        mtime = 0
+    etag = f'W/"{int(mtime)}"' if mtime else None
+
+    # If client already has this version, short-circuit before reading.
+    if etag and request.headers.get("if-none-match") == etag:
+        return Response(status_code=304, headers={"ETag": etag})
+
     thumbnail = _thumbnail_cache.get(card_id)
 
-    # Fallback: try loading from disk (path already validated + contained)
-    if thumbnail is None:
+    # Re-read from disk whenever the disk file is newer than the
+    # cached bytes (or the cache is empty). Keying on mtime means the
+    # cache stays consistent if the file is regenerated out-of-band.
+    cache_mtime = getattr(_thumbnail_cache, "_mtimes", {}).get(card_id, 0)
+    if thumbnail is None or mtime > cache_mtime:
         if os.path.exists(thumb_path):
             try:
                 with open(thumb_path, "rb") as f:
                     thumbnail = f.read()
                 _thumbnail_cache[card_id] = thumbnail
+                if not hasattr(_thumbnail_cache, "_mtimes"):
+                    _thumbnail_cache._mtimes = {}
+                _thumbnail_cache._mtimes[card_id] = mtime
             except Exception:
                 pass
 
     if thumbnail is None:
         raise HTTPException(status_code=404, detail="Thumbnail not found")
 
+    headers = {"Cache-Control": "public, max-age=60, must-revalidate"}
+    if etag:
+        headers["ETag"] = etag
     return StreamingResponse(
         io.BytesIO(thumbnail),
         media_type="image/jpeg",
-        headers={"Cache-Control": "public, max-age=3600"},
+        headers=headers,
     )
 
 

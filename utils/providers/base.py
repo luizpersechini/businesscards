@@ -81,6 +81,319 @@ def repair_cjk_substitutions(contact_dict: Optional[Dict]) -> Optional[Dict]:
     return contact_dict
 
 
+# ─── Title-in-name detection ─────────────────────────────────────────────────
+# Vision models routinely confuse a job title for the person's name when the
+# title is the largest text block on the card (common layout). We detect by
+# matching against a wordlist of role tokens in EN / PT / ES / FR / DE / IT.
+# Match policy: a string is "title-like" if (a) ≥50 % of its tokens are role
+# tokens, OR (b) it starts with an unambiguous role token (CEO, Manager,
+# Diretor, etc.) and contains no honorific. Tokens are matched case-folded.
+_ROLE_TOKENS = frozenset(
+    t.lower()
+    for t in (
+        # English — exec / mgmt
+        "CEO",
+        "CTO",
+        "CFO",
+        "COO",
+        "CIO",
+        "CMO",
+        "CISO",
+        "CSO",
+        "CDO",
+        "President",
+        "Vice",
+        "VP",
+        "EVP",
+        "SVP",
+        "Director",
+        "Manager",
+        "Head",
+        "Lead",
+        "Chief",
+        "Officer",
+        "Executive",
+        "Founder",
+        "Co-Founder",
+        "Cofounder",
+        "Owner",
+        "Partner",
+        "Principal",
+        "Associate",
+        "Assistant",
+        "Deputy",
+        "Senior",
+        "Sr",
+        "Junior",
+        "Jr",
+        # English — function / role
+        "Engineer",
+        "Architect",
+        "Designer",
+        "Developer",
+        "Programmer",
+        "Consultant",
+        "Analyst",
+        "Specialist",
+        "Coordinator",
+        "Supervisor",
+        "Administrator",
+        "Representative",
+        "Rep",
+        "Agent",
+        "Broker",
+        "Salesperson",
+        "Salesman",
+        "Saleswoman",
+        "Sales",
+        "Marketing",
+        "Operations",
+        "Finance",
+        "Accounting",
+        "Legal",
+        "Recruiter",
+        "Counsel",
+        "Attorney",
+        "Lawyer",
+        "Account",
+        "Project",
+        "Product",
+        "Program",
+        "Business",
+        "Technical",
+        "Solutions",
+        "Strategy",
+        "Strategic",
+        "Global",
+        "Regional",
+        "Country",
+        "General",
+        "Customer",
+        "Client",
+        "Service",
+        "Support",
+        "Development",
+        "Software",
+        "Hardware",
+        "Field",
+        # Honorific-as-title edge cases
+        "Dr",
+        "Prof",
+        "Professor",
+        # Portuguese
+        "Diretor",
+        "Diretora",
+        "Diretoria",
+        "Gerente",
+        "Coordenador",
+        "Coordenadora",
+        "Supervisor",
+        "Supervisora",
+        "Analista",
+        "Engenheiro",
+        "Engenheira",
+        "Consultor",
+        "Consultora",
+        "Vendedor",
+        "Vendedora",
+        "Comercial",
+        "Vendas",
+        "Presidente",
+        "Sócio",
+        "Socio",
+        "Proprietário",
+        "Proprietario",
+        "Dono",
+        "Chefe",
+        "Líder",
+        "Lider",
+        "Assistente",
+        "Auxiliar",
+        "Estagiário",
+        "Estagiaria",
+        "Operações",
+        "Operacoes",
+        "Financeiro",
+        "Financeira",
+        "Recursos",
+        "Humanos",
+        "RH",
+        # Spanish
+        "Gerente",
+        "Director",
+        "Directora",
+        "Jefe",
+        "Jefa",
+        "Vendedor",
+        "Asesor",
+        "Asesora",
+        "Encargado",
+        "Encargada",
+        "Ingeniero",
+        "Ingeniera",
+        # French
+        "Directeur",
+        "Directrice",
+        "Responsable",
+        "Chargé",
+        "Charge",
+        "Ingénieur",
+        "Ingenieur",
+        "Commercial",
+        "Commerciale",
+        # German
+        "Geschäftsführer",
+        "Geschaeftsfuehrer",
+        "Leiter",
+        "Leiterin",
+        "Vertrieb",
+        "Verkauf",
+        "Einkauf",
+        # Italian
+        "Direttore",
+        "Responsabile",
+        "Venditore",
+        "Ingegnere",
+    )
+)
+
+# Strong-signal tokens — appearance of any one of these alone (regardless of
+# the rest of the string) is enough to demote the value to title.
+_ROLE_STRONG = frozenset(
+    t.lower()
+    for t in (
+        "CEO",
+        "CTO",
+        "CFO",
+        "COO",
+        "CIO",
+        "CMO",
+        "CISO",
+        "CSO",
+        "CDO",
+        "VP",
+        "EVP",
+        "SVP",
+        "President",
+        "Director",
+        "Manager",
+        "Diretor",
+        "Diretora",
+        "Gerente",
+        "Geschäftsführer",
+        "Geschaeftsfuehrer",
+        "Directeur",
+        "Direttore",
+        "Presidente",
+        "Founder",
+        "Cofounder",
+        "Co-Founder",
+    )
+)
+
+# Honorifics & person-name signals — presence vetoes the demotion (the string
+# is probably actually a name even if it shares a token with a role list).
+_NAME_SIGNALS = frozenset(
+    t.lower()
+    for t in (
+        "Mr",
+        "Mrs",
+        "Ms",
+        "Miss",
+        "Sir",
+        "Dame",
+        "Sr.",
+        "Sra",
+        "Sra.",
+        "Srta",
+        "Mlle",
+        "Mme",
+        "M.",
+        "Herr",
+        "Frau",
+        "Signor",
+        "Signora",
+    )
+)
+
+_TOKEN_RE = re.compile(r"[A-Za-zÀ-ÖØ-öø-ÿ][\w'\-]*", re.UNICODE)
+
+
+def _looks_like_title(value: str) -> bool:
+    """Return True if `value` reads more like a job title than a person name."""
+    if not value or not isinstance(value, str):
+        return False
+    tokens = [t.lower() for t in _TOKEN_RE.findall(value)]
+    if not tokens or len(tokens) > 6:
+        # >6 tokens is unusual for either a title or a name; skip.
+        return False
+    # Veto if any honorific or other name-signal is present.
+    if any(t in _NAME_SIGNALS for t in tokens):
+        return False
+
+    role_hits = sum(1 for t in tokens if t in _ROLE_TOKENS)
+
+    # A single strong token on its own ("CEO", "Director", "Diretor") is
+    # an unambiguous title. But a strong token mixed WITH a non-role token
+    # is most likely a person whose surname collides with a role word —
+    # e.g. "Mike Director", "Anna Presidente". For those, fall through to
+    # the density rule rather than blanking a real name. So: strong-alone
+    # demotes only when every token is a role token (which also covers
+    # multi-word all-role titles like "Vice President" / "Sales Director").
+    has_strong = any(t in _ROLE_STRONG for t in tokens)
+    if has_strong and role_hits == len(tokens):
+        return True
+
+    # Otherwise demand >=50% of tokens be role-like AND >=2 role tokens
+    # (single weak match like "global" alone shouldn't demote).
+    return role_hits >= 2 and role_hits / len(tokens) >= 0.5
+
+
+def demote_title_misplaced_as_name(contact_dict: Optional[Dict]) -> Optional[Dict]:
+    """If `fullName` (or first/last) looks like a job title and `title` is
+    empty, move it over and clear the name field. Operates in-place. Safe
+    on None / non-dict.
+
+    Rationale: vision models frequently latch onto the largest text block
+    on a card (often the role) and emit it as the person's name. Caught
+    here so it never reaches the contacts repo / VCF export.
+    """
+    if not isinstance(contact_dict, dict):
+        return contact_dict
+
+    full = (contact_dict.get("fullName") or "").strip()
+    existing_title = (contact_dict.get("title") or "").strip()
+
+    if full and _looks_like_title(full):
+        # Only promote into title if title is empty — never overwrite a
+        # legitimate title the model also caught.
+        if not existing_title:
+            contact_dict["title"] = full
+        contact_dict["fullName"] = None
+        # Mirror clear on firstName/lastName if they came from the same
+        # title string (heuristic: their concatenation matches full).
+        first = (contact_dict.get("firstName") or "").strip()
+        last = (contact_dict.get("lastName") or "").strip()
+        joined = f"{first} {last}".strip()
+        if joined and joined.lower() == full.lower():
+            contact_dict["firstName"] = None
+            contact_dict["lastName"] = None
+        return contact_dict
+
+    # Also catch the firstName+lastName-only case (no fullName populated).
+    if not full:
+        first = (contact_dict.get("firstName") or "").strip()
+        last = (contact_dict.get("lastName") or "").strip()
+        joined = f"{first} {last}".strip()
+        if joined and _looks_like_title(joined):
+            if not existing_title:
+                contact_dict["title"] = joined
+            contact_dict["firstName"] = None
+            contact_dict["lastName"] = None
+
+    return contact_dict
+
+
 class VisionProvider(abc.ABC):
     """Abstract base class for vision/LLM providers."""
 
@@ -311,6 +624,10 @@ Rules:
         # Repair CJK substitutions (also reapplied centrally in
         # CardProcessor.extract_contact for the QR-only fast path).
         contact_dict = repair_cjk_substitutions(contact_dict)
+        # Catch the common vision-model failure mode where the role text is
+        # emitted as fullName. Moves it to title (if title was empty) and
+        # blanks the name fields so a real name still gets pulled later.
+        contact_dict = demote_title_misplaced_as_name(contact_dict)
         contact = ContactInfo.from_legacy_dict(contact_dict)
         confidence = 0.9 if contact.has_minimum_data() else 0.3
 

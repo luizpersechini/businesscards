@@ -25,26 +25,35 @@ class TestContactsRepository(unittest.TestCase):
 
     # ── Helpers ──────────────────────────────────────────────────────────
 
+    # NOTE: add_contact returns a result dict
+    # ({id, status, additions, conflicts, locked}) since the locked-contact
+    # merge feature. These helpers unwrap the id so the assertions below
+    # stay focused on the id contract.
     def _add_john(self) -> str:
         return self.repo.add_contact(
             {"fullName": "John Doe", "email": "john@example.com", "company": "Acme"},
             source_file="card1.png",
             vcf_content="BEGIN:VCARD\nFN:John Doe\nEND:VCARD",
-        )
+        )["id"]
 
     def _add_jane(self) -> str:
         return self.repo.add_contact(
-            {"fullName": "Jane Smith", "email": "jane@example.com", "phone": "555-0100", "company": "Beta Inc"},
+            {
+                "fullName": "Jane Smith",
+                "email": "jane@example.com",
+                "phone": "555-0100",
+                "company": "Beta Inc",
+            },
             source_file="card2.png",
             vcf_content="BEGIN:VCARD\nFN:Jane Smith\nEND:VCARD",
-        )
+        )["id"]
 
     def _add_nocompany(self) -> str:
         return self.repo.add_contact(
             {"firstName": "Bob", "lastName": "Empty", "email": "bob@test.com"},
             source_file="card3.png",
             vcf_content="BEGIN:VCARD\nFN:Bob Empty\nEND:VCARD",
-        )
+        )["id"]
 
     # ── Initial state ────────────────────────────────────────────────────
 
@@ -114,7 +123,7 @@ class TestContactsRepository(unittest.TestCase):
             {"fullName": "John Updated", "email": "john@example.com", "company": "NewCo"},
             source_file="card_updated.png",
             vcf_content="BEGIN:VCARD\nFN:John Updated\nEND:VCARD",
-        )
+        )["id"]
         self.assertEqual(cid1, cid2, "Should return the same id")
         self.assertEqual(self.repo.count(), 1, "Should still be one contact")
         entry = self.repo.get_all()[0]
@@ -178,12 +187,14 @@ class TestContactsRepository(unittest.TestCase):
     def test_get_all_sorted_newest_first(self):
         self._add_john()
         import time
+
         time.sleep(0.01)  # Ensure different timestamp
         self._add_jane()
         contacts = self.repo.get_all()
         self.assertEqual(len(contacts), 2)
         self.assertGreaterEqual(
-            contacts[0]["added_at"], contacts[1]["added_at"],
+            contacts[0]["added_at"],
+            contacts[1]["added_at"],
             "Newest should come first",
         )
 
@@ -214,9 +225,9 @@ class TestContactsRepository(unittest.TestCase):
     # ── Grouping ──────────────────────────────────────────────────────────
 
     def test_grouped_by_company(self):
-        self._add_john()        # Acme
-        self._add_jane()        # Beta Inc
-        self._add_nocompany()   # (No company)
+        self._add_john()  # Acme
+        self._add_jane()  # Beta Inc
+        self._add_nocompany()  # (No company)
         groups = self.repo.get_grouped_by_company()
         keys = list(groups.keys())
         self.assertIn("Acme", keys)
@@ -226,8 +237,8 @@ class TestContactsRepository(unittest.TestCase):
         self.assertEqual(groups["Acme"][0]["contact_data"]["fullName"], "John Doe")
 
     def test_grouped_no_company_last(self):
-        self._add_john()        # Acme
-        self._add_nocompany()   # (No company)
+        self._add_john()  # Acme
+        self._add_nocompany()  # (No company)
         groups = self.repo.get_grouped_by_company()
         keys = list(groups.keys())
         self.assertEqual(keys[-1], "(No company)", "(No company) should be last")

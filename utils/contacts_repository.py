@@ -72,6 +72,22 @@ class ContactsRepository:
         "notes",
     )
 
+    # Fields that are NEVER overwritten or surfaced as conflicts on a
+    # locked contact. The user's stated invariant: "locked means I checked
+    # it and I'm ok with most of it — never change name and email." If the
+    # existing record has a value for any of these, the incoming value is
+    # silently dropped (no conflict reported, no chance of override).
+    # Additive merges still work — if existing is empty for one of these,
+    # the incoming value can populate it.
+    _LOCKED_PROTECTED_FIELDS = frozenset(
+        (
+            "firstName",
+            "lastName",
+            "fullName",
+            "email",
+        )
+    )
+
     @staticmethod
     def _norm_field(v) -> str:
         if v is None or v == "":
@@ -90,6 +106,11 @@ class ContactsRepository:
           - `conflicts`: [{field, existing, incoming}] — fields where
               both sides have a value and they differ. Caller decides
               how to resolve.
+
+        Protected fields (`_LOCKED_PROTECTED_FIELDS` — name + email) on
+        a contact that already has a value for them are silently skipped:
+        no conflict reported, incoming value dropped. Empty protected
+        fields can still be populated additively.
         """
         additions: Dict = {}
         conflicts: List[Dict] = []
@@ -103,6 +124,10 @@ class ContactsRepository:
             if not ex_norm:
                 additions[k] = inc
             elif ex_norm != inc_norm:
+                if k in self._LOCKED_PROTECTED_FIELDS:
+                    # Protected: never overwrite, never surface as a
+                    # conflict the user can override. Silently drop.
+                    continue
                 conflicts.append({"field": k, "existing": ex, "incoming": inc})
             # else: both equal → no-op
         return {"additions": additions, "conflicts": conflicts}
@@ -200,6 +225,47 @@ class ContactsRepository:
             "conflicts": [],
             "locked": False,
         }
+
+    def apply_field_updates(self, contact_id: str, updates: Dict) -> Optional[Dict]:
+        """Apply a *partial* field-by-field update to a contact's data,
+        used by the conflict-resolution flow when the user accepts the
+        incoming value for specific fields after a scan/relaunch.
+
+        Differs from `update_contact` (which replaces the whole
+        contact_data dict). Pass `None` or `""` as a value to clear a
+        field. Regenerates the VCF after the merge so exports stay
+        consistent.
+
+        Returns the updated contact, or None if no contact matches.
+        """
+        if not updates:
+            return None
+        for contact in self._contacts:
+            if contact.get("id") != contact_id:
+                continue
+            cd = contact.setdefault("contact_data", {})
+            is_locked = bool(contact.get("locked"))
+            for k, v in updates.items():
+                # Locked-contact protection: name + email are never
+                # overwritten on a locked record, even via the explicit
+                # resolve endpoint. Empty existing values can still be
+                # populated.
+                if is_locked and k in self._LOCKED_PROTECTED_FIELDS and self._norm_field(cd.get(k)):
+                    continue
+                if v is None or v == "":
+                    cd.pop(k, None)
+                else:
+                    cd[k] = v
+            try:
+                from utils.vcf_generator import VCFGenerator
+
+                contact["vcf_content"] = VCFGenerator().generate_vcf_string(cd)
+            except Exception:
+                pass
+            contact["updated_at"] = datetime.now().isoformat()
+            self._save()
+            return contact
+        return None
 
     def set_locked(self, contact_id: str, locked: bool) -> bool:
         """Toggle the lock flag on a contact. Returns True on success."""

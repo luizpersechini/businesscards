@@ -46,16 +46,28 @@ def client(monkeypatch, tmp_path):
             "vcf_content": "BEGIN:VCARD\nVERSION:3.0\nFN:João Silva\nEND:VCARD\n",
         }
     ]
-    fake_contacts.get_all_vcf.return_value = (
-        "BEGIN:VCARD\nVERSION:3.0\nFN:João Silva\nEND:VCARD\n"
-    )
+    fake_contacts.get_all_vcf.return_value = "BEGIN:VCARD\nVERSION:3.0\nFN:João Silva\nEND:VCARD\n"
     fake_contacts.export_to_xlsx.return_value = b"PK\x03\x04fake-xlsx"
     fake_contacts.export_to_csv.return_value = "Name,Email\nJoão Silva,joao@acme.com\n"
     fake_contacts.remove_contact.return_value = True
-    fake_contacts.add_contact.return_value = "c2"
+    # add_contact returns a result dict since the locked-contact merge feature.
+    fake_contacts.add_contact.return_value = {
+        "id": "c2",
+        "status": "added",
+        "additions": {},
+        "conflicts": [],
+        "locked": False,
+    }
     fake_contacts.update_contact.return_value = {
         "id": "c1",
-        "full_name": "João Silva Jr.",
+        "fullName": "João Silva Jr.",
+        "email": "joao@acme.com",
+        "added_at": "2026-05-07T10:00:00",
+    }
+    # PUT /api/contacts/{id} now does a partial merge via apply_field_updates.
+    fake_contacts.apply_field_updates.return_value = {
+        "id": "c1",
+        "fullName": "João Silva Jr.",
         "email": "joao@acme.com",
         "added_at": "2026-05-07T10:00:00",
     }
@@ -154,7 +166,7 @@ def test_update_contact_happy_path(client):
 
 
 def test_update_contact_404_when_missing(client):
-    server._contacts.update_contact.return_value = None
+    server._contacts.apply_field_updates.return_value = None
     r = client.put(
         "/api/contacts/missing",
         json={"contact": {"fullName": "Nobody"}},
