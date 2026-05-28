@@ -2,6 +2,24 @@
 
 All notable changes to the Business Card Scanner project will be documented in this file.
 
+## [2.1.6] — 2026-05-27
+
+### Added
+
+- **History → Relaunch is now real.** Previously a stub: clicked, showed "Relaunching…" for 2 seconds, did nothing. Now:
+  - **`POST /api/history/{run_id}/relaunch`** endpoint reads the run's archived originals from `temp/history/<runId>/original/`, replays them through the same `_scan_generator` SSE pipeline a fresh upload uses, defaulting to the run's saved settings (`vision_model`, `detection_mode`, `vision_timeout`). Body can override any of model/mode/rows/cols/timeout/row_lines/col_lines/margin\_\*/deskew.
+  - Results land as a **new** history run; the original is untouched.
+  - Cards flow through the same contacts-repository merge logic — locked contacts respect the merge-or-conflict rule from 2.1.5; unlocked contacts get the legacy overwrite.
+  - **Live progress overlay** on the History tab run card during relaunch: stage badge, progress bar, message text — same data the Scanner shows. Once done, the history list auto-refreshes so the new run appears.
+  - One-at-a-time guard: clicking Relaunch on another card while one is in-flight is a no-op.
+
+### Internal
+
+- New helper class `_SyntheticUpload` in `server.py` — minimal `UploadFile`-shaped wrapper around in-memory bytes (just `.filename` and async `read()`). Lets `_scan_generator` consume disk files identically to fresh uploads without changing its signature.
+- `_MODE_REVERSE_MAP` maps `CardProcessor.detection_mode` strings back to the frontend's short codes (`"Automatic"` → `"auto"`, etc.) so a relaunch without overrides uses exactly the original detection mode.
+
+---
+
 ## [2.1.5] — 2026-05-27
 
 ### Added

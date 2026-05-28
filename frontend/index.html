@@ -6736,7 +6736,13 @@
         const [runs, setRuns] = useState([]);
         const [loadingHistory, setLoadingHistory] = useState(true);
         const [expandedId, setExpandedId] = useState(null);
-        const [relaunching, setRelaunching] = useState(null);
+        const [relaunching, setRelaunching] = useState(null); // runId
+        // Per-relaunch progress so the overlay shows real status, not a fake spinner
+        const [relaunchProgress, setRelaunchProgress] = useState({
+          stage: "warmup",
+          progress: 0,
+          message: "",
+        });
         const [filterModel, setFilterModel] = useState("all");
 
         // Load real history on mount
@@ -6766,9 +6772,79 @@
           [runs, filterModel],
         );
 
-        const handleRelaunch = (id) => {
+        // Re-run a past scan against its archived original files. Streams
+        // progress via SSE just like a fresh scan. The new results land
+        // as a separate history run; the original is left untouched.
+        const handleRelaunch = async (id) => {
+          if (relaunching) return; // ignore double-clicks while one is in-flight
           setRelaunching(id);
-          setTimeout(() => setRelaunching(null), 2000);
+          setRelaunchProgress({
+            stage: "warmup",
+            progress: 0,
+            message: "Starting…",
+          });
+          try {
+            const response = await fetch("/api/history/" + id + "/relaunch", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({}), // use saved settings
+            });
+            if (!response.ok) {
+              const detail = await response.text().catch(() => "");
+              throw new Error(
+                "HTTP " + response.status + ": " + detail.slice(0, 200),
+              );
+            }
+            const reader = response.body.getReader();
+            const decoder = new TextDecoder();
+            let buffer = "";
+            let done = false;
+            while (!done) {
+              const r = await reader.read();
+              if (r.done) break;
+              buffer += decoder.decode(r.value, { stream: true });
+              const lines = buffer.split("\n");
+              buffer = lines.pop();
+              for (const line of lines) {
+                if (!line.startsWith("data: ")) continue;
+                try {
+                  const evt = JSON.parse(line.slice(6));
+                  if (evt.stage === "error") {
+                    throw new Error(evt.message || "Scan error");
+                  }
+                  if (evt.stage === "done") {
+                    done = true;
+                    break;
+                  }
+                  if (evt.stage === "stopped") {
+                    done = true;
+                    break;
+                  }
+                  setRelaunchProgress({
+                    stage: evt.stage,
+                    progress: evt.progress || 0,
+                    message: evt.message || "",
+                  });
+                } catch (parseErr) {
+                  // Re-throw only real errors, not parse blips
+                  if (
+                    parseErr.message &&
+                    parseErr.message !== "Unexpected end of JSON input"
+                  ) {
+                    throw parseErr;
+                  }
+                }
+              }
+            }
+            // Refresh history list so the new run shows up
+            const fresh = await window.apiGet("/api/history");
+            setRuns(Array.isArray(fresh) ? fresh : []);
+          } catch (err) {
+            console.error("[relaunch] failed:", err);
+            alert("Relaunch failed: " + err.message);
+          } finally {
+            setRelaunching(null);
+          }
         };
 
         const handleDelete = (id) => {
@@ -7002,25 +7078,67 @@
                               position: "absolute",
                               inset: 0,
                               zIndex: 10,
-                              background: "oklch(100% 0 0 / 0.85)",
+                              background: "oklch(100% 0 0 / 0.9)",
                               borderRadius: 10,
                               display: "flex",
+                              flexDirection: "column",
                               alignItems: "center",
                               justifyContent: "center",
                               gap: 10,
                               backdropFilter: "blur(2px)",
+                              padding: 16,
                             }}
                           >
-                            <Spinner size={18} />
-                            <span
+                            <div
                               style={{
-                                fontSize: 13,
-                                fontWeight: 500,
-                                color: "var(--accent)",
+                                display: "flex",
+                                alignItems: "center",
+                                gap: 10,
                               }}
                             >
-                              Relaunching…
-                            </span>
+                              <Spinner size={18} />
+                              <span
+                                style={{
+                                  fontSize: 13,
+                                  fontWeight: 600,
+                                  color: "var(--accent)",
+                                }}
+                              >
+                                Relaunching… {relaunchProgress.stage}
+                              </span>
+                            </div>
+                            <div
+                              style={{
+                                width: "70%",
+                                maxWidth: 280,
+                                height: 4,
+                                background: "var(--bg)",
+                                borderRadius: 99,
+                                overflow: "hidden",
+                              }}
+                            >
+                              <div
+                                style={{
+                                  height: "100%",
+                                  width: (relaunchProgress.progress || 0) + "%",
+                                  background: "var(--accent)",
+                                  transition: "width 0.4s ease",
+                                }}
+                              />
+                            </div>
+                            {relaunchProgress.message && (
+                              <div
+                                style={{
+                                  fontSize: 11,
+                                  color: "var(--text-tertiary)",
+                                  maxWidth: 320,
+                                  textAlign: "center",
+                                  lineHeight: 1.4,
+                                }}
+                              >
+                                {relaunchProgress.message}
+                              </div>
+                            )}
                           </div>
                         )}
                         <RunCard

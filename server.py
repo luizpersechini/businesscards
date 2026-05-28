@@ -19,7 +19,7 @@ from typing import List, Optional, Tuple
 import cv2
 import numpy as np
 import requests as _requests
-from fastapi import FastAPI, File, Form, HTTPException, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from PIL import Image
@@ -1883,6 +1883,133 @@ async def download_history_zip(run_id: str):
         )
     except FileNotFoundError:
         raise HTTPException(status_code=404, detail="Run not found")
+
+
+# Map back from CardProcessor's detection_mode strings to the frontend's
+# short codes ("Automatic" -> "auto", etc.).
+_MODE_REVERSE_MAP = {
+    "Automatic": "auto",
+    "Single Card": "single",
+    "Manual - Single Card": "single",
+    "Manual - Grid Layout": "grid",
+}
+
+
+class _SyntheticUpload:
+    """Minimal UploadFile-shaped wrapper around in-memory bytes.
+
+    `_scan_generator` only needs `.filename` and `await .read()`, so we
+    provide just those two. Used by the relaunch endpoint to feed files
+    that were loaded from disk through the same pipeline UploadFile-
+    backed scans use, without changing the generator's signature.
+    """
+
+    def __init__(self, data: bytes, filename: str):
+        self._data = data
+        self.filename = filename
+
+    async def read(self) -> bytes:
+        return self._data
+
+
+@app.post("/api/history/{run_id}/relaunch")
+async def relaunch_history(run_id: str, request: Request):
+    """
+    Re-run a past scan against its archived original files.
+
+    Body (all optional — defaults come from the original run's saved settings):
+      {
+        "model":   "glm-ocr",
+        "mode":    "auto" | "single" | "grid",
+        "rows":    4, "cols": 2,
+        "timeout": 300,
+        "row_lines": "0.25,0.5,0.75", "col_lines": "0.5",
+        "margin_top": 0.0, "margin_bottom": 1.0,
+        "margin_left": 0.0, "margin_right": 1.0,
+        "deskew":  false
+      }
+
+    Returns the same SSE event stream as `POST /api/scan`. The resulting
+    cards are saved as a new history run (so the original run is
+    preserved) and merged into the contacts repository following the
+    standard lock / merge / conflict rules.
+    """
+    run_id = _safe_run_id(run_id)
+
+    # Locate the run on disk
+    try:
+        entry = _history.get_run(run_id)
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="Run not found")
+
+    settings = entry.settings or {}
+
+    # Find originals
+    run_dir = _history._run_path(run_id)
+    orig_dir = run_dir / "original"
+    if not orig_dir.exists():
+        raise HTTPException(
+            status_code=400,
+            detail="No original files archived for this run — cannot relaunch.",
+        )
+    orig_files = sorted(p for p in orig_dir.iterdir() if p.is_file())
+    if not orig_files:
+        raise HTTPException(status_code=400, detail="Original files directory is empty.")
+
+    # Parse body overrides (may be empty)
+    try:
+        body = await request.json()
+        if not isinstance(body, dict):
+            body = {}
+    except Exception:
+        body = {}
+
+    # Resolve effective settings: body override -> archived setting -> default
+    saved_mode = _MODE_REVERSE_MAP.get(settings.get("detection_mode", ""), "auto")
+    model = body.get("model") or settings.get("vision_model") or "glm-ocr"
+    mode = body.get("mode") or saved_mode
+    rows = int(body.get("rows", 4))
+    cols = int(body.get("cols", 2))
+    timeout = int(body.get("timeout") or settings.get("vision_timeout") or 300)
+    row_lines = body.get("row_lines", "") or ""
+    col_lines = body.get("col_lines", "") or ""
+    mt = _clamp01(body.get("margin_top", 0.0), 0.0)
+    mb = _clamp01(body.get("margin_bottom", 1.0), 1.0)
+    ml = _clamp01(body.get("margin_left", 0.0), 0.0)
+    mr = _clamp01(body.get("margin_right", 1.0), 1.0)
+    deskew = bool(body.get("deskew", False))
+
+    # Wrap the disk files as SyntheticUploads so _scan_generator can
+    # treat them identically to fresh uploads.
+    synthetic_files = []
+    for p in orig_files:
+        try:
+            synthetic_files.append(_SyntheticUpload(p.read_bytes(), p.name))
+        except Exception:
+            continue
+
+    if not synthetic_files:
+        raise HTTPException(status_code=500, detail="Could not read any archived original files.")
+
+    return StreamingResponse(
+        _scan_generator(
+            synthetic_files,
+            model,
+            mode,
+            rows,
+            cols,
+            timeout,
+            row_lines,
+            col_lines,
+            mt,
+            mb,
+            ml,
+            mr,
+            deskew,
+        ),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 # ═══════════════════════════════════════════════════════════
