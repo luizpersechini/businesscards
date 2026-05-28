@@ -5117,11 +5117,21 @@
             37) %
           360;
 
+        // A contact is considered "new" if its `addedAt` (YYYY-MM-DD)
+        // is today's local date. We use this to colour the row's left
+        // edge and show a small green NEW badge next to the name so the
+        // user can spot fresh imports at a glance after a scan.
+        const todayIso = new Date().toISOString().slice(0, 10);
+        const isNew = c.addedAt && c.addedAt === todayIso;
+
         return (
           <div
             style={{
               background: selected ? "var(--accent-soft)" : "var(--surface)",
               border: `1px solid ${selected ? "oklch(85% 0.08 264)" : "var(--border)"}`,
+              borderLeft: isNew
+                ? "3px solid var(--success)"
+                : `1px solid ${selected ? "oklch(85% 0.08 264)" : "var(--border)"}`,
               borderRadius: 8,
               overflow: "hidden",
               transition: "all 0.15s",
@@ -5187,6 +5197,23 @@
                   >
                     {c.contact.fullName}
                   </span>
+                  {isNew && (
+                    <span
+                      title="Added today"
+                      style={{
+                        fontSize: 9,
+                        fontWeight: 700,
+                        color: "white",
+                        background: "var(--success)",
+                        padding: "1px 6px",
+                        borderRadius: 99,
+                        letterSpacing: "0.04em",
+                        textTransform: "uppercase",
+                      }}
+                    >
+                      New
+                    </span>
+                  )}
                   {c.contact.title && (
                     <span
                       style={{ fontSize: 11, color: "var(--text-tertiary)" }}
@@ -5300,34 +5327,50 @@
                 )}
                 {onToggleLock && (
                   <button
-                    onClick={onToggleLock}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      e.preventDefault();
+                      console.log(
+                        "[lock] click on contact",
+                        c.id,
+                        "currently locked:",
+                        !!c.locked,
+                      );
+                      onToggleLock();
+                    }}
                     title={
                       c.locked
                         ? "Locked — future scans cannot overwrite. Click to unlock."
                         : "Click to lock. Locked contacts only merge in new fields; conflicting values are flagged."
                     }
                     style={{
-                      background: "none",
-                      border: "none",
-                      cursor: "pointer",
-                      color: c.locked
-                        ? "var(--accent)"
-                        : "var(--text-tertiary)",
-                      padding: 4,
                       display: "flex",
                       alignItems: "center",
-                      borderRadius: 4,
+                      gap: 5,
+                      padding: "4px 8px",
+                      border: "1px solid",
+                      borderColor: c.locked ? "var(--accent)" : "var(--border)",
+                      borderRadius: 5,
+                      cursor: "pointer",
+                      background: c.locked ? "var(--accent-soft)" : "var(--bg)",
+                      color: c.locked
+                        ? "var(--accent)"
+                        : "var(--text-secondary)",
+                      fontSize: 11,
+                      fontWeight: 500,
+                      fontFamily: "inherit",
                     }}
                     onMouseEnter={(e) => {
                       if (!c.locked)
-                        e.currentTarget.style.color = "var(--accent)";
+                        e.currentTarget.style.borderColor = "var(--accent)";
                     }}
                     onMouseLeave={(e) => {
                       if (!c.locked)
-                        e.currentTarget.style.color = "var(--text-tertiary)";
+                        e.currentTarget.style.borderColor = "var(--border)";
                     }}
                   >
-                    <Icons.lock color="currentColor" />
+                    <Icons.lock color="currentColor" width={11} height={11} />
+                    {c.locked ? "Locked" : "Lock"}
                   </button>
                 )}
                 <button
@@ -5470,11 +5513,22 @@
         onToggleLock,
         expandedId,
         onToggleExpand,
+        isOpen,
+        onToggleOpen,
       }) {
         const hue =
           (company.split("").reduce((a, ch) => a + ch.charCodeAt(0), 0) * 53) %
           360;
-        const [groupExpanded, setGroupExpanded] = useState(true);
+        // Local state used only as a fallback when the parent doesn't
+        // provide controlled `isOpen` / `onToggleOpen` props. Once the
+        // parent hands them down (Contacts tab does this so we can
+        // collapse-all from a toolbar button), local state is ignored.
+        const [localOpen, setLocalOpen] = useState(true);
+        const groupExpanded = isOpen != null ? isOpen : localOpen;
+        const setGroupExpanded = (v) =>
+          onToggleOpen
+            ? onToggleOpen(typeof v === "function" ? v(groupExpanded) : v)
+            : setLocalOpen(v);
         const allSelected = contacts.every((c) => selectedIds.has(c.id));
 
         const toggleAll = () => {
@@ -5593,6 +5647,18 @@
         const [expandedId, setExpandedId] = useState(null);
         const [exportDone, setExportDone] = useState("");
         const [editingContact, setEditingContact] = useState(null);
+        // Which company groups are currently open. Default: all open.
+        // Tracked here (not in each CompanyGroup) so a single button in
+        // the toolbar can collapse / expand them all at once.
+        const [openCompanies, setOpenCompanies] = useState(null); // null = "all open"
+        const toggleCompanyOpen = (name, open) => {
+          setOpenCompanies((prev) => {
+            const set = prev ? new Set(prev) : new Set(); // null → start empty
+            if (open) set.add(name);
+            else set.delete(name);
+            return set;
+          });
+        };
 
         // Load real contacts on mount
         useEffect(() => {
@@ -5864,6 +5930,50 @@
                   Group by company
                 </button>
 
+                {/* Collapse/Expand all company groups */}
+                {groupByCompany && (
+                  <button
+                    onClick={() => {
+                      // If currently "all open" (null) → collapse all (empty set).
+                      // Else → expand all (back to null).
+                      setOpenCompanies((prev) =>
+                        prev === null ? new Set() : null,
+                      );
+                    }}
+                    title={
+                      openCompanies === null
+                        ? "Collapse all company groups"
+                        : "Expand all company groups"
+                    }
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      gap: 6,
+                      padding: "7px 12px",
+                      border: "1px solid var(--border)",
+                      borderRadius: 6,
+                      background: "var(--surface)",
+                      color: "var(--text-secondary)",
+                      fontSize: 12,
+                      fontFamily: "inherit",
+                      fontWeight: 500,
+                      cursor: "pointer",
+                    }}
+                  >
+                    <Icons.chevronDown
+                      color="currentColor"
+                      style={{
+                        transform:
+                          openCompanies === null
+                            ? "rotate(0)"
+                            : "rotate(-90deg)",
+                        transition: "transform 0.15s",
+                      }}
+                    />
+                    {openCompanies === null ? "Collapse all" : "Expand all"}
+                  </button>
+                )}
+
                 <div style={{ flex: 1 }} />
 
                 {/* Export buttons */}
@@ -6024,6 +6134,10 @@
                     onToggleLock={handleToggleLock}
                     expandedId={expandedId}
                     onToggleExpand={handleToggleExpand}
+                    isOpen={
+                      openCompanies === null ? true : openCompanies.has(company)
+                    }
+                    onToggleOpen={(open) => toggleCompanyOpen(company, open)}
                   />
                 ))
               ) : (

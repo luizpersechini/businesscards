@@ -2,6 +2,23 @@
 
 All notable changes to the Business Card Scanner project will be documented in this file.
 
+## [2.1.7] — 2026-05-27
+
+### Added
+
+- **"NEW" badge + green left-edge ribbon** on contacts added today. Spotted right after a scan / relaunch — no need to remember which contacts were just imported.
+- **Collapse / Expand all** button in the Contacts-tab toolbar (only visible when "Group by company" is on). Toggles every `CompanyGroup` open or closed at once. Useful when you have dozens of companies.
+
+### Fixed
+
+- **Lock / unlock button in the Contacts tab wasn't responding to clicks**. The previous design used a bare 13×13 padlock icon with `color: var(--text-tertiary)` — nearly invisible, easy to miss-click, and the click was bubbling up to row-level handlers in some layouts. Now the lock control is a proper labelled pill button ("Lock" / "Locked"), 1px border, accent-tinted when locked, with explicit `stopPropagation()` and a `console.log` breadcrumb on click for diagnostics. Visual state change is unmistakable.
+
+### Internal
+
+- `CompanyGroup` accepts optional controlled `isOpen` / `onToggleOpen` props for parent-driven expansion state. Falls back to local state if those props aren't provided, so other call sites (none currently) stay backwards-compatible.
+
+---
+
 ## [2.1.6] — 2026-05-27
 
 ### Added
