@@ -6491,6 +6491,7 @@
         onToggle,
         onRelaunch,
         availableModels,
+        relaunchCards,
         onDelete,
         onZip,
       }) {
@@ -6910,6 +6911,196 @@
                 {expanded && (
                   <div className="fade-in">
                     <Divider />
+                    {/* Post-relaunch repo-impact panel. Only rendered when
+                        we have the SSE 'done' card array cached for THIS
+                        run (i.e. it was just produced by a Relaunch).
+                        /api/history doesn't preserve repoStatus per card,
+                        so this only shows for the relaunch session that
+                        created the run; reloading the page loses it.
+                        Tally + per-card conflict/additions details. */}
+                    {relaunchCards &&
+                      relaunchCards.length > 0 &&
+                      (() => {
+                        const tally = {
+                          added: 0,
+                          updated: 0,
+                          merged: 0,
+                          conflict: 0,
+                        };
+                        const conflictCards = [];
+                        const mergedCards = [];
+                        for (const c of relaunchCards) {
+                          const s = c.repoStatus || "added";
+                          if (tally[s] !== undefined) tally[s]++;
+                          if ((c.conflicts || []).length > 0)
+                            conflictCards.push(c);
+                          if (Object.keys(c.additions || {}).length > 0)
+                            mergedCards.push(c);
+                        }
+                        const totalConflicts = conflictCards.reduce(
+                          (n, c) => n + (c.conflicts || []).length,
+                          0,
+                        );
+                        return (
+                          <div style={{ padding: "12px 16px 0" }}>
+                            <div
+                              style={{
+                                fontSize: 11,
+                                fontWeight: 600,
+                                color: "var(--text-tertiary)",
+                                textTransform: "uppercase",
+                                letterSpacing: "0.06em",
+                                marginBottom: 6,
+                              }}
+                            >
+                              Repo impact (this relaunch)
+                            </div>
+                            <div
+                              style={{
+                                display: "flex",
+                                gap: 8,
+                                flexWrap: "wrap",
+                                marginBottom: 10,
+                                fontSize: 12,
+                              }}
+                            >
+                              <Badge
+                                label={`${tally.added} new`}
+                                color="blue"
+                              />
+                              <Badge
+                                label={`${tally.updated} updated`}
+                                color="neutral"
+                              />
+                              <Badge
+                                label={`${tally.merged} merged`}
+                                color="green"
+                              />
+                              <Badge
+                                label={`${tally.conflict} with conflicts`}
+                                color={tally.conflict > 0 ? "amber" : "neutral"}
+                              />
+                            </div>
+                            {conflictCards.length > 0 && (
+                              <div
+                                style={{
+                                  background: "var(--warning-soft)",
+                                  border: "1px solid oklch(88% 0.06 60)",
+                                  borderRadius: 6,
+                                  padding: "8px 12px",
+                                  marginBottom: 10,
+                                  fontSize: 11,
+                                }}
+                              >
+                                <div
+                                  style={{
+                                    fontWeight: 700,
+                                    color: "var(--warning)",
+                                    textTransform: "uppercase",
+                                    letterSpacing: "0.06em",
+                                    marginBottom: 6,
+                                  }}
+                                >
+                                  {totalConflicts} field conflict
+                                  {totalConflicts !== 1 ? "s" : ""} on{" "}
+                                  {conflictCards.length} locked contact
+                                  {conflictCards.length !== 1 ? "s" : ""}
+                                </div>
+                                {conflictCards.map((c, i) => (
+                                  <div
+                                    key={i}
+                                    style={{
+                                      background: "var(--surface)",
+                                      borderRadius: 4,
+                                      padding: "6px 8px",
+                                      marginBottom: 4,
+                                    }}
+                                  >
+                                    <div
+                                      style={{
+                                        fontWeight: 600,
+                                        marginBottom: 3,
+                                      }}
+                                    >
+                                      {c.contact.fullName ||
+                                        c.contact.email ||
+                                        "(unnamed)"}
+                                    </div>
+                                    {(c.conflicts || []).map((cf, j) => (
+                                      <div key={j} style={{ lineHeight: 1.5 }}>
+                                        <strong>{cf.field}:</strong> kept{" "}
+                                        <code
+                                          style={{
+                                            background: "var(--bg)",
+                                            padding: "1px 5px",
+                                            borderRadius: 3,
+                                          }}
+                                        >
+                                          {String(cf.existing)}
+                                        </code>{" "}
+                                        · skipped{" "}
+                                        <code
+                                          style={{
+                                            background: "var(--bg)",
+                                            padding: "1px 5px",
+                                            borderRadius: 3,
+                                          }}
+                                        >
+                                          {String(cf.incoming)}
+                                        </code>
+                                      </div>
+                                    ))}
+                                  </div>
+                                ))}
+                                <div
+                                  style={{
+                                    marginTop: 6,
+                                    fontSize: 10,
+                                    color: "var(--text-tertiary)",
+                                  }}
+                                >
+                                  Locked values were kept. To accept the new
+                                  value, edit the contact in the Contacts tab
+                                  (or unlock it and rescan).
+                                </div>
+                              </div>
+                            )}
+                            {mergedCards.length > 0 && (
+                              <div
+                                style={{
+                                  background: "var(--success-soft)",
+                                  border: "1px solid oklch(88% 0.06 145)",
+                                  borderRadius: 6,
+                                  padding: "8px 12px",
+                                  marginBottom: 10,
+                                  fontSize: 11,
+                                }}
+                              >
+                                <div
+                                  style={{
+                                    fontWeight: 700,
+                                    color: "var(--success)",
+                                    textTransform: "uppercase",
+                                    letterSpacing: "0.06em",
+                                    marginBottom: 6,
+                                  }}
+                                >
+                                  Fields added to {mergedCards.length} locked
+                                  contact{mergedCards.length !== 1 ? "s" : ""}
+                                </div>
+                                {mergedCards.map((c, i) => (
+                                  <div key={i} style={{ lineHeight: 1.5 }}>
+                                    <strong>
+                                      {c.contact.fullName || c.contact.email}
+                                    </strong>
+                                    : {Object.keys(c.additions).join(", ")}
+                                  </div>
+                                ))}
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })()}
                     <div
                       style={{
                         padding: "12px 16px",
@@ -7199,6 +7390,12 @@
           progress: 0,
           message: "",
         });
+        // Map of newly-created run id → its full card array (with repoStatus,
+        // conflicts, additions). Populated when a relaunch finishes so we
+        // can render the conflict / merge details inline on the new run's
+        // History card, without making the user hunt for them in another
+        // tab (the SSE response data isn't preserved by /api/history).
+        const [relaunchResults, setRelaunchResults] = useState({});
         const [filterModel, setFilterModel] = useState("all");
         // Models available on this Ollama instance, used to populate the
         // "Relaunch with…" model-picker flyout. Fetched once on mount.
@@ -7279,6 +7476,7 @@
             let buffer = "";
             let done = false;
             let finalCards = null; // capture the 'done' event's card array
+            let finalRunId = null; // capture the NEW run's id from the 'done' event
             while (!done) {
               const r = await reader.read();
               if (r.done) break;
@@ -7294,6 +7492,9 @@
                   }
                   if (evt.stage === "done") {
                     finalCards = evt.cards || [];
+                    // Capture the NEW run's id so we can auto-expand it
+                    // in the history list and show conflict details inline.
+                    if (evt.runId) finalRunId = evt.runId;
                     done = true;
                     break;
                   }
@@ -7321,6 +7522,21 @@
             const fresh = await window.apiGet("/api/history");
             setRuns(Array.isArray(fresh) ? fresh : []);
 
+            // Cache the SSE 'done' card array keyed by the new run id so
+            // RunCard can render conflicts/additions inline. /api/history
+            // doesn't surface repoStatus per card, so this client-side
+            // cache is the only place those details exist post-relaunch.
+            if (finalRunId && finalCards) {
+              setRelaunchResults((prev) => ({
+                ...prev,
+                [finalRunId]: finalCards,
+              }));
+              // Auto-expand the new run so the user immediately sees the
+              // inline conflict / additions panels — no scrolling, no
+              // tab switching, no hunting.
+              setExpandedId(finalRunId);
+            }
+
             // Summarise what happened to the contacts repo. Each card has
             // repoStatus = added | updated | merged | conflict. This is the
             // most useful feedback for the user — without it relaunch looks
@@ -7330,14 +7546,12 @@
               const tally = { added: 0, updated: 0, merged: 0, conflict: 0 };
               let totalAdditions = 0;
               let totalConflicts = 0;
-              const conflictCards = [];
               for (const c of finalCards) {
                 const s = c.repoStatus || "added";
                 if (tally[s] !== undefined) tally[s]++;
                 totalAdditions += Object.keys(c.additions || {}).length;
                 if ((c.conflicts || []).length > 0) {
                   totalConflicts += c.conflicts.length;
-                  conflictCards.push(c);
                 }
               }
               const lines = [
@@ -7357,7 +7571,10 @@
               if (totalConflicts > 0) {
                 lines.push(
                   "",
-                  `  ${totalConflicts} unresolved field conflict${totalConflicts !== 1 ? "s" : ""} — switch to the Scanner tab to view, or edit the locked contact in the Contacts tab.`,
+                  `  ${totalConflicts} unresolved field conflict${totalConflicts !== 1 ? "s" : ""}.`,
+                  `  Details are shown below on the newly-created run card`,
+                  `  (it's auto-expanded). To resolve, edit the locked`,
+                  `  contact in the Contacts tab.`,
                 );
               }
               alert(lines.join("\n"));
@@ -7674,6 +7891,7 @@
                           }
                           onRelaunch={handleRelaunch}
                           availableModels={availableModels}
+                          relaunchCards={relaunchResults[run.id] || null}
                           onDelete={handleDelete}
                           onZip={handleZip}
                         />

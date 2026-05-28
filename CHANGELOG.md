@@ -2,6 +2,23 @@
 
 All notable changes to the Business Card Scanner project will be documented in this file.
 
+## [2.1.12] — 2026-05-28
+
+### Fixed
+
+- **Relaunch conflicts were invisible** despite the alert telling users to "switch to the Scanner tab to view". That tab has its own state — the relaunch SSE data never reached it, so the user always saw nothing. The misleading alert text has been replaced and the conflicts are now shown **inline on the newly-created run card in the History tab itself**.
+
+### Added
+
+- **Post-relaunch repo-impact panel** in the History tab's expanded run card. When a Relaunch finishes:
+  - The new run is auto-expanded (no scrolling, no clicking).
+  - A "Repo impact (this relaunch)" panel appears at the top of the expanded view with four colour-coded badges: `N new`, `N updated`, `N merged`, `N with conflicts`.
+  - When conflicts exist: a yellow detail block lists each one — `kept "X" · skipped "Y"` — grouped by contact. Plus a one-line nudge: _"Locked values were kept. To accept the new value, edit the contact in the Contacts tab (or unlock it and rescan)."_
+  - When additive merges happened: a green block lists which fields were added to which contact.
+- Backed by a new client-side `relaunchResults` cache keyed by run id. `/api/history` doesn't preserve `repoStatus` per card, so this only shows for the relaunch session that created the run — reloading the page clears it (intentional: the conflicts are still recorded in the contacts repo and visible per-contact in the Contacts tab).
+
+---
+
 ## [2.1.11] — 2026-05-28
 
 ### Fixed
