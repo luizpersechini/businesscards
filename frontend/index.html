@@ -2950,7 +2950,20 @@
                       {c.title}
                     </div>
                   </div>
-                  <div style={{ display: "flex", gap: 4, flexShrink: 0 }}>
+                  <div
+                    style={{
+                      display: "flex",
+                      gap: 4,
+                      flexShrink: 0,
+                      alignItems: "center",
+                    }}
+                  >
+                    {card.detectedLang && (
+                      <Badge
+                        label={card.detectedLang.toUpperCase()}
+                        color="neutral"
+                      />
+                    )}
                     <Badge
                       label={card.via}
                       color={

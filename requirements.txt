@@ -25,6 +25,7 @@ imutils>=0.5.4             # Convenience wrappers (resize, grab_contours) used b
 pyzbar==0.1.9              # QR/barcode detection
 phonenumbers>=8.13         # Google libphonenumber port — phone parsing/validation
 probablepeople>=0.5        # CRF-based Person/Corporation parser for OCR text
+langdetect>=1.0.9          # Lightweight language detection for post-correction routing
 pymupdf>=1.23.0            # PDF rendering (no poppler needed)
 
 # ============================================================================

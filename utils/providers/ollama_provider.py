@@ -250,12 +250,18 @@ class OllamaVisionProvider(VisionProvider):
                 else:
                     contact_dict = self.parse_json_response(response_text)
 
-                # Optional LLM post-correction. Off by default; enable
-                # by setting OCR_POST_CORRECTION_MODEL=qwen2.5:3b (or
-                # any other small instruction-following Ollama model)
-                # to fix typos / accent loss / field swaps. ~2-5s/card.
-                correction_model = os.environ.get("OCR_POST_CORRECTION_MODEL", "").strip()
+                # Optional LLM post-correction with language-aware routing.
+                # Off by default. Configure per-language model overrides:
+                #   OCR_POST_CORRECTION_MODEL_EN=qwen2.5:3b
+                #   OCR_POST_CORRECTION_MODEL_PT=gemma3:1b-pt
+                #   OCR_POST_CORRECTION_MODEL_ES=qwen2.5:3b
+                # Falls back to the generic `OCR_POST_CORRECTION_MODEL` for
+                # any language without a specific override. When neither is
+                # set, no correction runs.
+                lang, correction_model = self._pick_correction_model(response_text)
                 if correction_model and contact_dict:
+                    if lang:
+                        contact_dict["_detected_lang"] = lang
                     contact_dict = (
                         self._llm_post_correct(
                             raw_text=response_text,
@@ -316,6 +322,45 @@ class OllamaVisionProvider(VisionProvider):
         """True for pure OCR models that output raw text, not JSON."""
         name = self.config.model_name.lower()
         return any(kw in name for kw in _OCR_ONLY_MODELS)
+
+    @staticmethod
+    def _detect_language(text: str) -> Optional[str]:
+        """Best-effort 2-letter ISO 639-1 language code for `text`.
+        Returns None if `langdetect` is not installed, the text is too
+        short to classify, or detection fails. Mostly we care about
+        'en', 'pt', 'es' for business-card routing.
+
+        We seed langdetect for determinism — short multilingual text
+        can otherwise yield different codes on repeated runs.
+        """
+        if not text or len(text.strip()) < 12:
+            return None
+        try:
+            from langdetect import detect, DetectorFactory  # type: ignore
+
+            DetectorFactory.seed = 0
+            return detect(text)
+        except Exception:
+            return None
+
+    @classmethod
+    def _pick_correction_model(cls, raw_text: str) -> tuple:
+        """Decide which post-correction model to use based on language.
+
+        Lookup order:
+          1. OCR_POST_CORRECTION_MODEL_<UPPER>  (e.g. ..._PT, ..._EN, ..._ES)
+          2. OCR_POST_CORRECTION_MODEL          (generic fallback)
+
+        Returns (detected_lang_code_or_None, model_name_or_empty).
+        Caller treats empty model_name as "skip correction".
+        """
+        lang = cls._detect_language(raw_text)
+        if lang:
+            specific = os.environ.get(f"OCR_POST_CORRECTION_MODEL_{lang.upper()}", "").strip()
+            if specific:
+                return lang, specific
+        generic = os.environ.get("OCR_POST_CORRECTION_MODEL", "").strip()
+        return lang, generic
 
     @staticmethod
     def _contact_json_schema() -> Dict:

@@ -412,6 +412,11 @@ def _contact_data_to_frontend(
                 print(f"Error saving thumbnail to disk: {e}")
             has_thumbnail = True
 
+    # Lift language hint out of contact_data (set by the post-correction
+    # router) so the frontend can show it on the card without it polluting
+    # the saved contact dict.
+    detected_lang = cd.pop("_detected_lang", None) if isinstance(cd, dict) else None
+
     return {
         "id": idx + 1,
         "cardId": card_id,
@@ -421,6 +426,7 @@ def _contact_data_to_frontend(
         "repoStatus": card.get("_repo_status", ""),  # added|updated|merged|conflict
         "additions": card.get("_additions") or {},
         "conflicts": card.get("_conflicts") or [],
+        "detectedLang": detected_lang,
         "source": source_file,
         "via": via,
         "time": round(processing_time, 1),

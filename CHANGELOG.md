@@ -2,6 +2,41 @@
 
 All notable changes to the Business Card Scanner project will be documented in this file.
 
+## [2.1.10] — 2026-05-28
+
+### Added
+
+- **Language-aware LLM post-correction routing.** The optional post-correction pass (off by default) now detects the card's language from the raw OCR text via `langdetect` and routes to a per-language model when available.
+  - Configure overrides with `OCR_POST_CORRECTION_MODEL_<LANG>` env vars, where `<LANG>` is the 2-letter ISO 639-1 code uppercased:
+    ```
+    export OCR_POST_CORRECTION_MODEL_PT=gemma3:1b-pt-ocr-correct
+    export OCR_POST_CORRECTION_MODEL_ES=qwen2.5:3b
+    export OCR_POST_CORRECTION_MODEL_EN=qwen2.5:3b
+    ```
+  - Falls back to the generic `OCR_POST_CORRECTION_MODEL` for any language without a specific override. When neither is set, no correction runs (same as before).
+- **`detectedLang` field in the scan API response** — surfaces the detected language code (e.g. `"pt"`) on each card. Frontend now shows a small `PT` / `EN` / `ES` badge next to the `via` badge in the scan-result card, so you can see at a glance which model corrected which card.
+- **`langdetect>=1.0.9`** added to `requirements.txt`.
+
+### Internal
+
+- Two new helpers on `OllamaVisionProvider`:
+  - `_detect_language(text)` — best-effort ISO 639-1 detection with seeded determinism. Returns None for text under 12 chars or when langdetect isn't installed.
+  - `_pick_correction_model(raw_text)` — returns `(lang, model_name)` after consulting the env vars.
+- `_detected_lang` is set on `contact_dict` before correction runs, then lifted out by the server's frontend mapper so it doesn't pollute the saved contact data.
+
+### Recommended setup for trilingual workflows (EN / PT / ES)
+
+A single multilingual small model (qwen2.5:3b, gemma3:1b, llama3.2:3b) handles all three languages adequately. Pull it once:
+
+```
+ollama pull qwen2.5:3b
+export OCR_POST_CORRECTION_MODEL=qwen2.5:3b
+```
+
+If you find a pt-BR-specific corrector model that beats qwen on Portuguese cards (Gemma 3 pt-OCR-fine-tunes exist on HuggingFace), use the `_PT` override to route just those.
+
+---
+
 ## [2.1.9] — 2026-05-28
 
 ### Changed
