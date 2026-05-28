@@ -6799,6 +6799,7 @@
             const decoder = new TextDecoder();
             let buffer = "";
             let done = false;
+            let finalCards = null; // capture the 'done' event's card array
             while (!done) {
               const r = await reader.read();
               if (r.done) break;
@@ -6813,6 +6814,7 @@
                     throw new Error(evt.message || "Scan error");
                   }
                   if (evt.stage === "done") {
+                    finalCards = evt.cards || [];
                     done = true;
                     break;
                   }
@@ -6826,7 +6828,6 @@
                     message: evt.message || "",
                   });
                 } catch (parseErr) {
-                  // Re-throw only real errors, not parse blips
                   if (
                     parseErr.message &&
                     parseErr.message !== "Unexpected end of JSON input"
@@ -6836,9 +6837,52 @@
                 }
               }
             }
+
             // Refresh history list so the new run shows up
             const fresh = await window.apiGet("/api/history");
             setRuns(Array.isArray(fresh) ? fresh : []);
+
+            // Summarise what happened to the contacts repo. Each card has
+            // repoStatus = added | updated | merged | conflict. This is the
+            // most useful feedback for the user — without it relaunch looks
+            // like nothing happened because the email-keyed merge means
+            // the contact count rarely changes.
+            if (finalCards && finalCards.length > 0) {
+              const tally = { added: 0, updated: 0, merged: 0, conflict: 0 };
+              let totalAdditions = 0;
+              let totalConflicts = 0;
+              const conflictCards = [];
+              for (const c of finalCards) {
+                const s = c.repoStatus || "added";
+                if (tally[s] !== undefined) tally[s]++;
+                totalAdditions += Object.keys(c.additions || {}).length;
+                if ((c.conflicts || []).length > 0) {
+                  totalConflicts += c.conflicts.length;
+                  conflictCards.push(c);
+                }
+              }
+              const lines = [
+                `Relaunch finished. ${finalCards.length} card${finalCards.length !== 1 ? "s" : ""} extracted.`,
+                "",
+                `  • ${tally.added} new contact${tally.added !== 1 ? "s" : ""} added`,
+                `  • ${tally.updated} existing contact${tally.updated !== 1 ? "s" : ""} updated (unlocked overwrite)`,
+                `  • ${tally.merged} locked contact${tally.merged !== 1 ? "s" : ""} had fields merged in (additive)`,
+                `  • ${tally.conflict} locked contact${tally.conflict !== 1 ? "s" : ""} had field conflicts`,
+              ];
+              if (totalAdditions > 0) {
+                lines.push(
+                  "",
+                  `  Fields added across all merges: ${totalAdditions}`,
+                );
+              }
+              if (totalConflicts > 0) {
+                lines.push(
+                  "",
+                  `  ${totalConflicts} unresolved field conflict${totalConflicts !== 1 ? "s" : ""} — switch to the Scanner tab to view, or edit the locked contact in the Contacts tab.`,
+                );
+              }
+              alert(lines.join("\n"));
+            }
           } catch (err) {
             console.error("[relaunch] failed:", err);
             alert("Relaunch failed: " + err.message);
