@@ -20,7 +20,7 @@ python-multipart>=0.0.9   # multipart/form-data upload support
 # CORE UI & COMPUTER VISION
 # ============================================================================
 opencv-python>=4.9.0,<5    # Image processing (>=4.9 fixes NumPy 2.0 ABI break)
-pillow>=10.3,<12           # Image manipulation (>=10.3 fixes CVE-2023-50447, Python 3.13 compatible)
+pillow>=12.2.0             # CVE-2026-42308/09/10/11 buffer-overflow fixes; 12.2.0 already installed + works with pillow-heif 1.3.0
 pillow-heif>=0.13.0        # HEIC/HEIF support (iPhone photos)
 imutils>=0.5.4             # Convenience wrappers (resize, grab_contours) used by improved_card_detector
 pyzbar==0.1.9              # QR/barcode detection
