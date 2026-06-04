@@ -60,6 +60,11 @@ _ALLOWED_CONTENT_TYPES = (
     "application/xhtml+xml",
     "application/json",
     "text/plain",
+    # vCard download endpoints (e.g. WordPress "save contact" / Mobiz /vcard)
+    # very commonly serve the .vcf as a generic binary stream. We still only
+    # *parse* it as a vCard if the body starts with BEGIN:VCARD, and the
+    # 2 MB cap applies, so accepting this type is safe.
+    "application/octet-stream",
 )
 _USER_AGENT = "BusinessCardScanner/1.0 (+local; QR contact resolver)"
 
@@ -274,6 +279,10 @@ def _parse_vcard_text(text: str) -> Dict:
             out["organization"] = value.split(";")[0]
         elif key == "TITLE":
             out["title"] = value
+        elif key == "ROLE":
+            # Some vCards (e.g. Mobiz) put the job title in ROLE, not TITLE.
+            # TITLE wins if both are present.
+            out.setdefault("title", value)
         elif key == "TEL":
             out.setdefault("phones", []).append(value)
         elif key == "EMAIL":
@@ -343,6 +352,14 @@ def _parse_jsonld_person(data) -> Dict:
         is_person = any("person" in x for x in types)
         is_org = any("organization" in x for x in types)
         if not (is_person or is_org):
+            continue
+        # Skip the page's WordPress author / publisher Person node — on
+        # CMS-hosted digital business cards (Mobiz, WordPress) the JSON-LD
+        # often carries the *site author* (e.g. the agency that built the
+        # card) as a Person, which is NOT the card's subject. Identify it by
+        # its author-archive URL/@id and ignore it.
+        node_url = str(node.get("url") or node.get("@id") or "")
+        if is_person and "/author/" in node_url:
             continue
         name = node.get("name")
         if name and "full_name" not in out and is_person:
@@ -426,11 +443,23 @@ def _parse_html(html: str, base_url: str) -> Tuple[Dict, Optional[str]]:
             if phone:
                 out.setdefault("phones", []).append(phone)
 
-    # 4. og:title / <title> as a last-resort name (only if nothing better)
-    if "full_name" not in out:
-        og = soup.find("meta", attrs={"property": "og:title"})
-        if og and og.get("content"):
-            out["full_name"] = og["content"].strip()
+    # 4. og:title — on digital business cards this is the card owner, in the
+    #    form "Name | Company" (or "Name - Company"). It's more reliable than
+    #    a stray JSON-LD Person node, so when it has that separator pattern we
+    #    let it OVERRIDE the name and fill the company. Without a separator we
+    #    only use it as a last-resort name.
+    og = soup.find("meta", attrs={"property": "og:title"})
+    og_title = (og.get("content") or "").strip() if og else ""
+    if og_title:
+        parts = re.split(r"\s+[|\-–—]\s+", og_title, maxsplit=1)
+        if len(parts) == 2:
+            name_part, org_part = parts[0].strip(), parts[1].strip()
+            if name_part:
+                out["full_name"] = name_part  # override (authoritative)
+            if org_part:
+                out.setdefault("organization", org_part)
+        elif "full_name" not in out:
+            out["full_name"] = og_title
 
     # Dedup list fields
     for k in ("emails", "phones"):

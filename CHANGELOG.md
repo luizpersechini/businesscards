@@ -2,6 +2,20 @@
 
 All notable changes to the Business Card Scanner project will be documented in this file.
 
+## [2.1.22] — 2026-06-04
+
+### Fixed
+
+- **QR-linked contact pages now resolve to the full, correct contact** (was returning sparse/wrong data — typically a single field or the wrong name). Found while testing a real Mobiz digital business card (`my.mobiz.pro/...`). Three resolver bugs:
+  - **Authoritative vCard was being rejected.** Digital-card platforms expose a "save contact" endpoint (e.g. `/<slug>/vcard`) that serves the real vCard as `application/octet-stream`. The content-type allowlist blocked it, so the resolver fell back to scraping the HTML. Added `application/octet-stream` to the allowlist (still only parsed as a vCard if the body starts with `BEGIN:VCARD`, still 2 MB-capped). The `/vcard`-style endpoint (no `.vcf` extension) was already discovered; now it's actually used.
+  - **Wrong name from the page author.** WordPress/Mobiz pages embed a JSON-LD `Person` for the _site author_ (the agency that built the card), which the parser took as the contact — e.g. returning "Marcelo Dias" for Victor Becattini's card. Person nodes whose `@id`/`url` is an `/author/` archive are now skipped.
+  - **`og:title` is now authoritative for the owner's name.** On these cards `og:title` is "Name | Company"; the parser now splits it, overrides the name, and fills the company.
+  - Also: vCard `ROLE` now maps to the job title (Mobiz puts the title in `ROLE`, not `TITLE`).
+  - Net result on the test card: full name, "Vice President Sales Brazil", SANDVIK, work + cell phones, and email — all pulled correctly, then merged non-destructively with the card's OCR fields (website, notes preserved).
+- 5 new resolver tests (octet-stream vCard accepted, `/vcard` endpoint discovery, author-node skip, `og:title` override, `ROLE`→title). 275 total pass.
+
+---
+
 ## [2.1.21] — 2026-06-04
 
 ### Added

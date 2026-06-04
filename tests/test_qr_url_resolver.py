@@ -153,6 +153,63 @@ class TestParsers:
         fields, vcf_url = r._parse_html(html, "https://card.x.io/bob")
         assert vcf_url == "https://card.x.io/download/contact.vcf"
 
+    def test_html_discovers_vcard_endpoint_without_extension(self):
+        # Mobiz/WordPress style: /slug/vcard (no .vcf extension)
+        html = '<a href="/victorbecattini/vcard">Save contact</a>'
+        fields, vcf_url = r._parse_html(html, "https://my.mobiz.pro/victorbecattini/")
+        assert vcf_url == "https://my.mobiz.pro/victorbecattini/vcard"
+
+    def test_jsonld_skips_wordpress_author(self):
+        # The page author Person (an /author/ archive URL) is the publisher,
+        # not the card subject — must be ignored.
+        data = {
+            "@graph": [
+                {
+                    "@type": "Person",
+                    "@id": "https://site/author/agency/",
+                    "url": "https://site/author/agency/",
+                    "name": "Agency Admin",
+                },
+                {"@type": "Organization", "name": "RealCo"},
+            ]
+        }
+        out = r._parse_jsonld_person(data)
+        assert out.get("full_name") != "Agency Admin"
+        assert out.get("organization") == "RealCo"
+
+    def test_html_og_title_overrides_name_and_fills_company(self):
+        # og:title "Name | Company" is authoritative for the owner's name.
+        html = (
+            "<html><head>"
+            '<script type="application/ld+json">'
+            '{"@type":"Person","@id":"https://x/author/admin/",'
+            '"url":"https://x/author/admin/","name":"Site Admin"}'
+            "</script>"
+            '<meta property="og:title" content="Victor Becattini | SANDVIK" />'
+            "</head><body></body></html>"
+        )
+        fields, _ = r._parse_html(html, "https://x/")
+        assert fields["full_name"] == "Victor Becattini"
+        assert fields["organization"] == "SANDVIK"
+
+    def test_vcard_role_maps_to_title(self):
+        vcf = "BEGIN:VCARD\nFN:V B\nROLE:VP Sales\nORG:Acme\nEND:VCARD"
+        out = r._parse_vcard_text(vcf)
+        assert out["title"] == "VP Sales"
+
+    def test_octet_stream_vcard_is_accepted(self, monkeypatch):
+        # A vCard endpoint that serves application/octet-stream must still be
+        # read + parsed (common for "save contact" download endpoints).
+        monkeypatch.setattr(r, "validate_url_safe", lambda u: (True, ""))
+        monkeypatch.setattr(r, "_check_safe_browsing", lambda u: (True, ""))
+        vcf = "BEGIN:VCARD\nFN:Octet Person\nEMAIL:o@x.io\nEND:VCARD"
+        monkeypatch.setattr(
+            r.requests, "get", lambda *a, **k: _mock_resp(vcf, "application/octet-stream")
+        )
+        out = r.resolve_qr_url("https://example.com/card/vcard")
+        assert out["ok"] is True
+        assert out["fields"]["full_name"] == "Octet Person"
+
 
 # ── Orchestration (mocked fetch) ─────────────────────────────────────────────
 
