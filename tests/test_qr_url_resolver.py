@@ -197,6 +197,29 @@ class TestParsers:
         out = r._parse_vcard_text(vcf)
         assert out["title"] == "VP Sales"
 
+    def test_normalize_name_splits_full_into_first_last(self):
+        # vCard packed the whole name into the first slot.
+        out = r._normalize_name(
+            {"full_name": "Victor Becattini", "first_name": "Victor Becattini", "last_name": ""}
+        )
+        assert out["first_name"] == "Victor"
+        assert out["last_name"] == "Becattini"
+
+    def test_normalize_name_three_tokens(self):
+        out = r._normalize_name({"full_name": "Ana Maria Souza", "last_name": ""})
+        assert out["first_name"] == "Ana"
+        assert out["last_name"] == "Maria Souza"
+
+    def test_normalize_name_preserves_existing_split(self):
+        out = r._normalize_name({"full_name": "Bob Lee", "first_name": "Bob", "last_name": "Lee"})
+        assert out["first_name"] == "Bob"
+        assert out["last_name"] == "Lee"
+
+    def test_normalize_name_single_token_untouched(self):
+        out = r._normalize_name({"full_name": "Cher", "last_name": ""})
+        assert out.get("first_name") in (None, "")
+        assert out.get("last_name") == ""
+
     def test_octet_stream_vcard_is_accepted(self, monkeypatch):
         # A vCard endpoint that serves application/octet-stream must still be
         # read + parsed (common for "save contact" download endpoints).

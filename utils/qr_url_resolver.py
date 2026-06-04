@@ -256,6 +256,27 @@ _EMAIL_RE = re.compile(r"[\w.+%-]+@[\w.-]+\.[A-Za-z]{2,}")
 _TEL_RE = re.compile(r"tel:\+?[0-9().\-\s]{6,}", re.I)
 
 
+def _normalize_name(fields: Dict) -> Dict:
+    """Derive first/last from full_name when the source packed the whole
+    name into one field (common in vCards that emit N:;Full Name;;; ).
+
+    Only acts when full_name has 2+ tokens AND last_name is empty/missing —
+    so a legitimate first/last split from the source is never clobbered.
+    The first token becomes first_name, the remainder last_name. This keeps
+    VCF exports (which use the N: first/last fields) correct.
+    """
+    if not isinstance(fields, dict):
+        return fields
+    full = (fields.get("full_name") or "").strip()
+    last = (fields.get("last_name") or "").strip()
+    if full and not last:
+        tokens = full.split()
+        if len(tokens) >= 2:
+            fields["first_name"] = tokens[0]
+            fields["last_name"] = " ".join(tokens[1:])
+    return fields
+
+
 def _parse_vcard_text(text: str) -> Dict:
     """Minimal vCard parser → qr_data-shaped dict (self-contained, no cv2)."""
     out: Dict = {}
@@ -554,5 +575,6 @@ def resolve_qr_url(url: str) -> Dict:
         result["reason"] = "No contact data found at URL"
         return result
 
+    result["fields"] = _normalize_name(result["fields"])
     result["ok"] = True
     return result

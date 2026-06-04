@@ -2,6 +2,14 @@
 
 All notable changes to the Business Card Scanner project will be documented in this file.
 
+## [2.1.23] — 2026-06-04
+
+### Fixed
+
+- **QR-resolved names now split into first/last** for VCF exports. Many hosted vCards pack the whole name into one field (`N:;Victor Becattini;;;`), leaving `firstName` holding the full name and `lastName` empty — so the exported VCF `N:` line had no surname. New `_normalize_name` derives first/last from `full_name` when `last_name` is empty (first token → first, remainder → last), without clobbering a legitimate split from the source. Single-token names (e.g. "Cher") are left untouched. 4 new tests; 279 total pass.
+
+---
+
 ## [2.1.22] — 2026-06-04
 
 ### Fixed
