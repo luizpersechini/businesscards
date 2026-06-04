@@ -2,6 +2,17 @@
 
 All notable changes to the Business Card Scanner project will be documented in this file.
 
+## [2.1.20] — 2026-06-04
+
+### Fixed
+
+- **The desktop shortcut sometimes opened a different app (a Streamlit "cota" dashboard) instead of the scanner.** Root cause: the server defaulted to port **8501**, which is also Streamlit's default port. When a Streamlit project was already running, the launcher's bare `lsof` check saw the port occupied and just opened the browser to whatever was there. Two-part fix:
+  - **Moved the scanner to a dedicated port 9247** (clear of Streamlit's 8501, Ollama's 11434, and the user's other local dashboards clustered around 850x/876x). Updated `server.py` default, the launcher app, the Stop app, and all docs (`README`, `TESTING`, `QUICKSTART`, `CLAUDE.md`, `setup.sh`, `.claude/launch.json`).
+  - **Hardened the launcher to verify identity before opening.** It now probes the BCS-specific `/api/status` endpoint and only opens the browser if the response is actually our server (JSON with an `"ollama"` key). If a foreign app squats the port, it shows a dialog telling the user to stop that app rather than silently opening the wrong thing.
+- The Stop app now targets 9247 too, so it can no longer accidentally kill a Streamlit project that happened to be on 8501.
+
+---
+
 ## [2.1.19] — 2026-05-28
 
 ### Fixed

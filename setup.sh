@@ -88,7 +88,7 @@ echo ""
 echo "2. In a new terminal, run the FastAPI server:"
 echo "   python3 server.py"
 echo ""
-echo "3. Open your browser to http://localhost:8501"
+echo "3. Open your browser to http://localhost:9247"
 echo ""
 echo "Happy scanning! 📇"
 

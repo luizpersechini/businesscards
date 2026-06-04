@@ -42,7 +42,7 @@ python3 server.py
 
 ## Step 3: Use the App
 
-1. Open browser to `http://localhost:8501`
+1. Open browser to `http://localhost:9247`
 2. Drop business card images / PDF onto the upload zone
 3. Click **Process** — watch live progress, click **Stop** to cancel
 4. Review and edit any extracted fields inline

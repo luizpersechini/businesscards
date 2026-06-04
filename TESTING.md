@@ -33,11 +33,11 @@ export DYLD_LIBRARY_PATH=/opt/homebrew/lib:$DYLD_LIBRARY_PATH
 python3 server.py
 ```
 
-You should see uvicorn start on `http://localhost:8501`.
+You should see uvicorn start on `http://localhost:9247`.
 
 ### 2. Open the Application
 
-Open your web browser and go to `http://localhost:8501`
+Open your web browser and go to `http://localhost:9247`
 
 You should see:
 - ✅ Title: "📇 Business Card Reader"

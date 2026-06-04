@@ -67,7 +67,7 @@ export DYLD_LIBRARY_PATH=/opt/homebrew/lib:$DYLD_LIBRARY_PATH
 python3 server.py
 ```
 
-Open **<http://localhost:8501>**. The FastAPI backend serves the React UI at `/` and exposes REST + SSE endpoints for the scan pipeline.
+Open **<http://localhost:9247>**. The FastAPI backend serves the React UI at `/` and exposes REST + SSE endpoints for the scan pipeline.
 
 > 💡 On macOS, double-click the included `BusinessCardScanner.app` (built locally — see [QUICKSTART.md](QUICKSTART.md)) to start the server with one click and auto-open the browser.
 

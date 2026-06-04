@@ -2149,5 +2149,8 @@ async def serve_frontend():
 if __name__ == "__main__":
     import uvicorn
 
-    port = int(os.environ.get("PORT", "8501"))
+    # Default 9247 — deliberately NOT 8501 (Streamlit's default port),
+    # which collides with the user's Streamlit projects. Override with
+    # the PORT env var if needed.
+    port = int(os.environ.get("PORT", "9247"))
     uvicorn.run("server:app", host="0.0.0.0", port=port, reload=True)
