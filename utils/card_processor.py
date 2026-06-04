@@ -170,6 +170,16 @@ class CardProcessor:
         except Exception as e:
             logger.warning(f"QR code reading failed: {e}")
 
+        # Capture any URL the QR encodes so the UI can offer to fetch the
+        # linked contact page on demand. We deliberately do NOT fetch here —
+        # resolution is user-initiated via POST /api/resolve-qr-url so no
+        # network request is made during an unattended scan.
+        qr_pending_url = None
+        if qr_data:
+            cand = qr_data.get("url")
+            if isinstance(cand, str) and cand.strip().lower().startswith(("http://", "https://")):
+                qr_pending_url = cand.strip()
+
         # Step 2: Check if QR data is sufficient
         if qr_data_is_sufficient(qr_data):
             logger.info(
@@ -192,6 +202,8 @@ class CardProcessor:
                 contact_data = demote_title_misplaced_as_name(contact_data)
             except Exception as e:
                 logger.warning(f"CJK repair failed (non-fatal): {e}")
+            if qr_pending_url:
+                contact_data["_qr_url"] = qr_pending_url
             return contact_data, via_qr
 
         if qr_data:
@@ -259,6 +271,9 @@ class CardProcessor:
             contact_data = demote_title_misplaced_as_name(contact_data)
         except Exception as e:
             logger.warning(f"CJK repair failed (non-fatal): {e}")
+
+        if qr_pending_url:
+            contact_data["_qr_url"] = qr_pending_url
 
         return contact_data, via_qr
 

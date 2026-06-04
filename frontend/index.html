@@ -3077,8 +3077,147 @@
         );
       }
 
+      // ─── QR Link Fetcher ──────────────────────────────────────────────────────────
+      // Shown when a card's QR code encoded a URL (a hosted vCard / digital
+      // business card) instead of inline fields. Nothing is fetched until the
+      // user clicks — the request goes to POST /api/resolve-qr-url, which runs
+      // SSRF + scheme + (optional) Safe-Browsing checks server-side before
+      // making any outbound request. On success the pulled fields are merged
+      // into the card via onMergeQr.
+      function QrLinkFetcher({ cardId, url, onMergeQr }) {
+        const [busy, setBusy] = useState(false);
+        const [done, setDone] = useState(false);
+        const [error, setError] = useState(null);
+        const [source, setSource] = useState("");
+
+        if (!url) return null;
+
+        const shortUrl = url.length > 60 ? url.slice(0, 57) + "…" : url;
+
+        const handleFetch = async () => {
+          setBusy(true);
+          setError(null);
+          try {
+            const r = await fetch("/api/resolve-qr-url", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ url }),
+            });
+            const data = await r.json();
+            if (!data.ok) {
+              setError(data.reason || "Could not fetch contact data");
+              return;
+            }
+            const fields = data.contact || {};
+            if (Object.keys(fields).length === 0) {
+              setError("No contact data found at that link.");
+              return;
+            }
+            setSource(data.source || "");
+            setDone(true);
+            onMergeQr && onMergeQr(cardId, fields);
+          } catch (err) {
+            setError("Request failed: " + err.message);
+          } finally {
+            setBusy(false);
+          }
+        };
+
+        return (
+          <div
+            style={{
+              background: "var(--accent-soft)",
+              border: "1px solid var(--accent)",
+              borderRadius: 6,
+              padding: "8px 10px",
+              marginBottom: 6,
+            }}
+          >
+            <div
+              style={{
+                fontSize: 11,
+                fontWeight: 700,
+                color: "var(--accent)",
+                textTransform: "uppercase",
+                letterSpacing: "0.06em",
+                marginBottom: 4,
+                display: "flex",
+                alignItems: "center",
+                gap: 5,
+              }}
+            >
+              <Icons.globe width={11} height={11} color="currentColor" />
+              QR code links to a contact page
+            </div>
+            <div
+              style={{
+                fontSize: 11,
+                color: "var(--text-secondary)",
+                marginBottom: 8,
+                wordBreak: "break-all",
+                fontFamily: "ui-monospace, monospace",
+              }}
+              title={url}
+            >
+              {shortUrl}
+            </div>
+            {done ? (
+              <div
+                style={{
+                  fontSize: 11,
+                  color: "var(--success)",
+                  fontWeight: 500,
+                }}
+              >
+                ✓ Pulled contact data{source ? ` (${source})` : ""} and filled
+                empty fields. Review above, then Save.
+              </div>
+            ) : (
+              <>
+                <button
+                  onClick={handleFetch}
+                  disabled={busy}
+                  style={{
+                    padding: "5px 12px",
+                    fontSize: 11,
+                    fontWeight: 600,
+                    background: busy ? "var(--bg)" : "var(--accent)",
+                    color: busy ? "var(--text-tertiary)" : "white",
+                    border: "1px solid var(--accent)",
+                    borderRadius: 4,
+                    cursor: busy ? "wait" : "pointer",
+                  }}
+                >
+                  {busy ? "Checking + fetching…" : "Fetch contact data"}
+                </button>
+                <span
+                  style={{
+                    fontSize: 10,
+                    color: "var(--text-tertiary)",
+                    marginLeft: 8,
+                  }}
+                >
+                  Link is safety-checked before opening.
+                </span>
+                {error && (
+                  <div
+                    style={{
+                      fontSize: 11,
+                      color: "var(--danger)",
+                      marginTop: 6,
+                    }}
+                  >
+                    ✗ {error}
+                  </div>
+                )}
+              </>
+            )}
+          </div>
+        );
+      }
+
       // ─── Contact Card (Result) ─────────────────────────────────────────────────────
-      function ContactCard({ card, onToggleLock, onSave, onEdit }) {
+      function ContactCard({ card, onToggleLock, onSave, onEdit, onMergeQr }) {
         const [expanded, setExpanded] = useState(false);
         const [saved, setSaved] = useState(false);
         const [thumbnailUrl, setThumbnailUrl] = useState(null);
@@ -3233,6 +3372,9 @@
                         color="neutral"
                       />
                     )}
+                    {/* QR-link badge — nudges the user to expand and fetch
+                              the linked contact page. */}
+                    {card.qrUrl && <Badge label="QR link" color="blue" />}
                     {/* Per-card repo-status badge. Surfaces conflict /
                               merged outcomes right on the card itself, so the
                               user spots them without scrolling to the top
@@ -3347,6 +3489,14 @@
                 }}
               >
                 <Divider style={{ marginBottom: 8 }} />
+                {/* QR-linked contact page — user-initiated fetch */}
+                {card.qrUrl && (
+                  <QrLinkFetcher
+                    cardId={card.id}
+                    url={card.qrUrl}
+                    onMergeQr={onMergeQr}
+                  />
+                )}
                 {/* Conflicts (if any) — most-actionable info shown first */}
                 {(card.conflicts || []).length > 0 && (
                   <div
@@ -3595,7 +3745,14 @@
       }
 
       // ─── Results Panel ────────────────────────────────────────────────────────────
-      function ResultsPanel({ cards, runId, onToggleLock, onSave, onEdit }) {
+      function ResultsPanel({
+        cards,
+        runId,
+        onToggleLock,
+        onSave,
+        onEdit,
+        onMergeQr,
+      }) {
         const [view, setView] = useState("grid");
         const [selectedIds, setSelectedIds] = useState(new Set());
         const [bulkSaved, setBulkSaved] = useState(false);
@@ -3970,6 +4127,7 @@
                     onToggleLock={onToggleLock}
                     onSave={onSave}
                     onEdit={onEdit}
+                    onMergeQr={onMergeQr}
                   />
                 </div>
               ))}
@@ -4253,6 +4411,34 @@
           setPreviewData(null);
           setErrorMsg("");
           setWarnings([]);
+        };
+
+        // Merge contact fields pulled from a QR-linked page into a card.
+        // Non-destructive: only fills fields the card doesn't already have,
+        // so OCR data the user may have reviewed isn't silently overwritten.
+        // Clears qrUrl (so the button hides) and flags qrResolved for the
+        // provenance note.
+        const handleMergeQr = (cardId, fields) => {
+          setCards((prev) =>
+            prev.map((c) => {
+              if (c.id !== cardId) return c;
+              const merged = { ...c.contact };
+              const filled = [];
+              for (const [k, v] of Object.entries(fields || {})) {
+                if (v && !merged[k]) {
+                  merged[k] = v;
+                  filled.push(k);
+                }
+              }
+              return {
+                ...c,
+                contact: merged,
+                qrUrl: null,
+                qrResolved: true,
+                qrFilled: filled,
+              };
+            }),
+          );
         };
 
         const handleToggleLock = async (id) => {
@@ -5253,6 +5439,7 @@
                     runId={runId}
                     onToggleLock={handleToggleLock}
                     onEdit={onEditCard}
+                    onMergeQr={handleMergeQr}
                   />
                 </div>
               )}

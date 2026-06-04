@@ -2,6 +2,24 @@
 
 All notable changes to the Business Card Scanner project will be documented in this file.
 
+## [2.1.21] — 2026-06-04
+
+### Added
+
+- **Resolve QR codes that link to a hosted contact page.** Some business cards encode a URL (a hosted vCard, a digital-business-card page like HiHello/Popl) in their QR instead of inline fields. The scanner now detects this and, on the card's expanded view, shows a **"Fetch contact data"** button (plus a "QR link" badge on the collapsed card). Fetching is **user-initiated** — nothing hits the network during the scan.
+  - New `utils/qr_url_resolver.py` does the guarded fetch + extraction. Extraction priority: vCard / MECARD body → `application/json` (schema.org Person) → HTML (JSON-LD `Person`/`Organization`, then a discovered `.vcf` download link re-fetched for richer data, then `mailto:`/`tel:` links and `og:title`).
+  - New endpoint `POST /api/resolve-qr-url`. Pulled fields are merged **non-destructively** into the card (only fills empty fields, so reviewed OCR data isn't clobbered); the user then Saves as normal.
+- **Security — the URL is threat-checked before any request is made:**
+  - Scheme allowlist (http/https only), no embedded credentials, ports limited to 80/443.
+  - **SSRF guard:** every hostname is DNS-resolved and each IP checked against private/loopback/link-local/reserved ranges (blocks `127.0.0.1`, `10/8`, `192.168/16`, `169.254.169.254` cloud-metadata, `::1`, etc.). `localhost` rejected outright.
+  - Redirects followed manually (max 3), **re-validated at every hop** so a public URL can't bounce to an internal one.
+  - Response caps: 8s timeout, 2 MB max, content-type allowlist.
+  - Optional Google Safe Browsing lookup when `GOOGLE_SAFE_BROWSING_API_KEY` is set (skipped silently otherwise).
+- Tests: `tests/test_qr_url_resolver.py` — 28 cases (SSRF/scheme/port rejections incl. cloud-metadata IP, DNS-resolves-to-private, vCard/MECARD/JSON-LD/HTML parsing, and mocked end-to-end orchestration confirming no fetch happens for a blocked URL).
+- Dep: `beautifulsoup4` added to `requirements.txt` (was used elsewhere but unlisted).
+
+---
+
 ## [2.1.20] — 2026-06-04
 
 ### Fixed

@@ -430,6 +430,11 @@ def _contact_data_to_frontend(
     # the saved contact dict.
     detected_lang = cd.pop("_detected_lang", None) if isinstance(cd, dict) else None
 
+    # Lift the pending QR URL (set by card_processor when the card's QR code
+    # encodes a link rather than inline fields). The frontend shows a "Fetch
+    # contact data" button for it; nothing is fetched until the user clicks.
+    qr_url = cd.pop("_qr_url", None) if isinstance(cd, dict) else None
+
     return {
         "id": idx + 1,
         "cardId": card_id,
@@ -440,6 +445,7 @@ def _contact_data_to_frontend(
         "additions": card.get("_additions") or {},
         "conflicts": card.get("_conflicts") or [],
         "detectedLang": detected_lang,
+        "qrUrl": qr_url,
         "source": source_file,
         "via": via,
         "time": round(processing_time, 1),
@@ -1655,6 +1661,52 @@ async def resolve_contact_conflicts(contact_id: str, payload: dict):
     if not updated:
         raise HTTPException(status_code=404, detail="Contact not found")
     return {"ok": True, "contact": _contact_to_api(updated)}
+
+
+@app.post("/api/resolve-qr-url")
+async def resolve_qr_url_endpoint(payload: dict):
+    """User-initiated: fetch a contact page that a card's QR code links to,
+    and return the extracted contact fields.
+
+    Body: {"url": "https://..."}
+    The URL is validated against an SSRF / scheme / port guard (and an
+    optional Google Safe Browsing check) BEFORE any request is made. On
+    success returns the extracted fields mapped to the frontend contact
+    shape. On a blocked or empty URL returns {"ok": false, "reason": ...}.
+    """
+    url = (payload or {}).get("url", "")
+    if not isinstance(url, str) or not url.strip():
+        raise HTTPException(status_code=400, detail="Missing url")
+
+    # Runs blocking network I/O — push to a thread so the event loop is free.
+    loop = asyncio.get_event_loop()
+    try:
+        from utils.qr_url_resolver import resolve_qr_url
+
+        result = await loop.run_in_executor(None, resolve_qr_url, url.strip())
+    except Exception as e:  # defensive — resolver shouldn't raise, but be safe
+        return {"ok": False, "reason": f"Resolver error: {e}", "contact": {}}
+
+    if not result.get("ok"):
+        return {
+            "ok": False,
+            "reason": result.get("reason") or "Could not resolve URL",
+            "contact": {},
+        }
+
+    # Map the qr_data-shaped fields to the frontend contact shape.
+    from utils.ui_components import qr_to_contact_data
+
+    contact = qr_to_contact_data(result.get("fields") or {})
+    # Don't let the resolved page's own URL clobber the original card website
+    # unless the page actually provided one; qr_to_contact_data already maps
+    # any 'url' field to 'website'.
+    return {
+        "ok": True,
+        "contact": contact,
+        "source": result.get("source", ""),
+        "finalUrl": result.get("final_url", url),
+    }
 
 
 @app.put("/api/contacts/{contact_id}")
