@@ -236,3 +236,47 @@ def test_root_serves_html_frontend(client):
     # Sanity: the React shell ships with these markers
     assert "<!DOCTYPE html>" in body or "<!doctype html>" in body
     assert "Business Card Reader" in body
+
+
+# ── QR-only card consolidation ───────────────────────────────────────────────
+
+
+def test_consolidate_merges_qr_only_into_single_rich_card():
+    """A spurious QR-region card folds into the one real card; its _qr_url
+    and website transfer over so the 'Fetch contact data' affordance is kept."""
+    rich = {"contact_data": {"fullName": "Victor Becattini", "email": "v@s.com", "phone": "+55"}}
+    qr = {
+        "contact_data": {
+            "website": "https://my.mobiz.pro/x",
+            "notes": "Contact extracted from QR code",
+            "_qr_url": "https://my.mobiz.pro/x",
+        }
+    }
+    out = server._consolidate_qr_only_cards([rich, qr])
+    assert len(out) == 1
+    assert out[0]["contact_data"]["_qr_url"] == "https://my.mobiz.pro/x"
+    assert out[0]["contact_data"]["website"] == "https://my.mobiz.pro/x"
+
+
+def test_consolidate_leaves_batch_untouched():
+    """With multiple rich cards we can't attribute a stray QR — leave all."""
+    rich1 = {"contact_data": {"fullName": "A", "email": "a@x.com"}}
+    rich2 = {"contact_data": {"fullName": "B", "email": "b@x.com"}}
+    qr = {"contact_data": {"website": "https://q/x", "_qr_url": "https://q/x"}}
+    out = server._consolidate_qr_only_cards([rich1, rich2, qr])
+    assert len(out) == 3
+
+
+def test_consolidate_keeps_lone_qr_card():
+    """A QR-dominant card with no rich sibling is kept as-is."""
+    qr = {"contact_data": {"website": "https://q/x", "_qr_url": "https://q/x"}}
+    out = server._consolidate_qr_only_cards([qr])
+    assert len(out) == 1
+
+
+def test_consolidate_noop_without_qr_url():
+    """Two rich cards, no QR — unchanged."""
+    a = {"contact_data": {"fullName": "A", "email": "a@x.com"}}
+    b = {"contact_data": {"company": "Acme", "phone": "+1"}}
+    out = server._consolidate_qr_only_cards([a, b])
+    assert len(out) == 2

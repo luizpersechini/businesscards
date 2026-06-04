@@ -687,6 +687,56 @@ def _gap_detect_and_regularize(bgr: np.ndarray) -> list:
     return rects
 
 
+def _card_has_real_contact(card: dict) -> bool:
+    """True if a result card carries an actual person/contact field (not just
+    a QR URL). Used to tell a real card from a spurious QR-region card."""
+    cd = card.get("contact_data") or {}
+    return any(
+        cd.get(k)
+        for k in ("firstName", "lastName", "fullName", "email", "phone", "mobile", "company")
+    )
+
+
+def _consolidate_qr_only_cards(results: list) -> list:
+    """Fold a spurious 'QR-only' card back into the real card.
+
+    In Automatic mode the detector can pick up a card's QR code as its own
+    rectangular region. That region yields a card with only a website/notes
+    and a pending `_qr_url` (no name/email/phone) — a duplicate of the real
+    card on the same image.
+
+    When there is exactly ONE real (rich) card, we transfer the QR URL (and
+    website) onto it and drop the QR-only card(s), so the user gets a single
+    card with the 'Fetch contact data' affordance instead of two.
+
+    Guard: only fires with a single rich card. With multiple rich cards (a
+    batch scan) we can't tell which one a stray QR belongs to, so we leave
+    everything untouched.
+    """
+    if len(results) < 2:
+        return results
+    rich = [c for c in results if _card_has_real_contact(c)]
+    qr_only = [
+        c
+        for c in results
+        if not _card_has_real_contact(c) and (c.get("contact_data") or {}).get("_qr_url")
+    ]
+    if len(rich) != 1 or not qr_only:
+        return results
+
+    target = rich[0]
+    tcd = target.setdefault("contact_data", {})
+    for q in qr_only:
+        qcd = q.get("contact_data") or {}
+        if qcd.get("_qr_url") and not tcd.get("_qr_url"):
+            tcd["_qr_url"] = qcd["_qr_url"]
+        if qcd.get("website") and not tcd.get("website"):
+            tcd["website"] = qcd["website"]
+
+    drop = {id(c) for c in qr_only}
+    return [c for c in results if id(c) not in drop]
+
+
 def _process_with_refinement(
     processor,
     image_bgr,
@@ -752,7 +802,7 @@ def _process_with_refinement(
             )
             if card:
                 results.append(card)
-    return results
+    return _consolidate_qr_only_cards(results)
 
 
 async def _scan_generator(

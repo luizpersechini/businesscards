@@ -2,6 +2,17 @@
 
 All notable changes to the Business Card Scanner project will be documented in this file.
 
+## [2.1.24] — 2026-06-04
+
+### Fixed
+
+- **A single card with a QR code produced two result cards.** Two compounding causes:
+  - **"Single Card" mode wasn't actually single.** `server.py` maps the frontend's `"single"` to the string `"Single Card"`, but `CardProcessor.detect_cards` only recognised `"Manual - Single Card"` — so the value matched nothing and fell through to **Automatic** detection. Automatic detection then picked up the card's QR square as its own rectangular region → two cards (one from vision with the full contact, one from the QR region with just the URL). `detect_cards` now normalises the mode string and accepts all spellings (`Single Card`, `single`, `Manual - Single Card`, …) for single/grid/auto, so a mismatch can never silently fall through again.
+  - **Robustness net for Automatic mode**, where a QR square can still be detected as a separate region: `_consolidate_qr_only_cards` folds a "QR-only" card (no name/email/phone, just a pending `_qr_url`) back into the real card on the same image — transferring the QR URL + website so the "Fetch contact data" button is preserved — and drops the duplicate. Guarded to only fire when there's exactly **one** rich card, so batch scans (where a stray QR can't be attributed) are left untouched.
+- 9 new tests (single-card string variants; consolidation merge / batch-safety / lone-QR / no-op). 287 total pass.
+
+---
+
 ## [2.1.23] — 2026-06-04
 
 ### Fixed

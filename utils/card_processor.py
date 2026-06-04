@@ -85,11 +85,23 @@ class CardProcessor:
         """
         logger.info(f"Detecting cards using mode: {detection_mode}")
 
-        if detection_mode == "Manual - Single Card":
+        # Normalize the mode string. The server maps the frontend's "single"
+        # to "Single Card" and "grid" to "Manual - Grid Layout", but older
+        # code paths use "Manual - Single Card". Accept all spellings so a
+        # mismatch can't silently fall through to Automatic — which would
+        # split a single card (e.g. its QR code) into multiple regions.
+        _mode = (detection_mode or "").strip().lower()
+
+        if _mode in ("manual - single card", "single card", "single"):
             logger.info("Processing entire image as single card")
             return [(image_bgr, None)]
 
-        elif detection_mode == "Manual - Grid Layout":
+        elif _mode in (
+            "manual - grid layout",
+            "grid layout",
+            "grid",
+            "manual - grid",
+        ):
             logger.info(f"Splitting into {grid_rows}x{grid_cols} grid")
             cards = split_image_grid(
                 image_bgr,
@@ -103,7 +115,7 @@ class CardProcessor:
             logger.info(f"Split into {len(cards)} cards from grid")
             return cards
 
-        elif detection_mode == "Automatic":
+        elif _mode in ("automatic", "auto", ""):
             logger.info("Running automatic card detection")
             detected_cards = self.detector.detect_cards(image_bgr)
 
