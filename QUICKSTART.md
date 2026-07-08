@@ -12,9 +12,13 @@ cd "/Users/LuizPersechini_1/Projects/Leitor Otimo Cartoes LLM"
 ```
 
 **Or manually:**
+
 ```bash
-# Install Python packages
-pip3 install -r requirements.txt
+# Python 3.10+ is required (starlette>=1.0.1 / fastapi>=0.111 ship no
+# wheels for 3.9). Install into a project-local .venv — the
+# BusinessCardScanner.app launcher expects .venv/bin/python3.
+python3.13 -m venv .venv          # or: uv venv --python 3.13 .venv
+.venv/bin/python -m pip install -r requirements.lock   # hash-pinned
 
 # System libs (QR + HEIC + Tesseract)
 brew install zbar libheif tesseract              # macOS
@@ -28,11 +32,13 @@ brew install zbar libheif tesseract              # macOS
 ## Step 2: Start the Application
 
 Terminal 1 (Ollama, recommended):
+
 ```bash
 ollama serve
 ```
 
 Terminal 2 (FastAPI server + React frontend):
+
 ```bash
 export DYLD_LIBRARY_PATH="/opt/homebrew/lib:$DYLD_LIBRARY_PATH"   # macOS only — for QR support
 python3 server.py
@@ -51,11 +57,13 @@ python3 server.py
 ## Importing to Outlook
 
 ### Outlook Desktop
+
 1. File → Open & Export → Import/Export
 2. Select "Import a vCard file (.vcf)"
 3. Choose your downloaded VCF file
 
 ### Outlook Web
+
 1. Click People/Contacts
 2. Click "Import contacts"
 3. Upload VCF file
@@ -63,12 +71,14 @@ python3 server.py
 ## Tips for Best Results
 
 ✅ **DO:**
+
 - Use clear, well-lit photos
 - Ensure text is readable
 - Keep cards flat when photographing
 - Use high resolution images
 
 ❌ **DON'T:**
+
 - Use blurry photos
 - Mix cards with other documents
 - Use extremely low light
@@ -97,4 +107,3 @@ python3 server.py
 ---
 
 **That's it! You're ready to digitize your business card collection! 📇✨**
-

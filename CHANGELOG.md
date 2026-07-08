@@ -2,6 +2,21 @@
 
 All notable changes to the Business Card Scanner project will be documented in this file.
 
+## [2.1.25] — 2026-07-08
+
+### Fixed
+
+- **`setup.sh` failed with an unreadable pip error on Python 3.9.** The project declares `requires-python = ">=3.10"` and pins `starlette>=1.0.1` (the CVE-2026-48710 BadHost fix) plus `fastapi>=0.111` — neither publishes wheels for 3.9. `setup.sh` only _printed_ the Python version, never checked it, so pip died with a wall of `Ignored the following versions that require a different python version` and `No matching distribution found for starlette>=1.0.1`. It now enforces the ≥3.10 floor up front with an actionable message (suggesting `brew install python@3.13` or `uv`).
+- **`setup.sh` installed into user site-packages, never a venv** — while `BusinessCardScanner.app` execs `$PROJECT_DIR/.venv/bin/python3`. A fresh `setup.sh` therefore left the desktop shortcut permanently broken ("Python venv not found"). Setup now always creates a project-local `.venv`, preferring `uv` when available (which supplies its own Python) and falling back to `python -m venv`.
+- **Installs from `requirements.lock` when present** (hash-pinned, reproducible) instead of the floating `requirements.txt`.
+- Docs (`README.md`, `QUICKSTART.md`) no longer tell users to `pip install -r requirements.txt` into user-site; they point at `./setup.sh` / the `.venv` and state the 3.10+ floor.
+
+### Notes
+
+- The existing `.venv` on this machine was **orphaned**: `pyvenv.cfg` pointed at `/opt/homebrew/opt/python@3.13`, which had been uninstalled, leaving `.venv/bin/python` a dangling symlink. Rebuilt against uv's managed CPython 3.13.13 and reinstalled from `requirements.lock` — this also upgraded the runtime from the vulnerable `starlette 0.27.0` / `fastapi 0.104.1` (user-site, Python 3.9) to `starlette 1.3.1` / `fastapi 0.136.3`, and pulled in `probablepeople` + `pytest-timeout`, which had been silently missing. 287 tests pass on the full pytest config.
+
+---
+
 ## [2.1.24] — 2026-06-04
 
 ### Fixed

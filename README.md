@@ -58,13 +58,15 @@ ollama pull glm-ocr
 
 ### 3. Install Python deps and run
 
+**Python 3.10+ required** (`starlette>=1.0.1` / `fastapi>=0.111` publish no wheels for 3.9). Deps install into a project-local `.venv` — the `BusinessCardScanner.app` launcher expects `.venv/bin/python3`.
+
 ```bash
-pip install -r requirements.txt
+./setup.sh              # creates .venv + installs from requirements.lock
 
 # macOS only — let pyzbar find zbar
 export DYLD_LIBRARY_PATH=/opt/homebrew/lib:$DYLD_LIBRARY_PATH
 
-python3 server.py
+.venv/bin/python server.py
 ```
 
 Open **<http://localhost:9247>**. The FastAPI backend serves the React UI at `/` and exposes REST + SSE endpoints for the scan pipeline.
