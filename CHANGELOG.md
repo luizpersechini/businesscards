@@ -2,6 +2,20 @@
 
 All notable changes to the Business Card Scanner project will be documented in this file.
 
+## [2.1.27] — 2026-07-08
+
+### Added
+
+- **Email-anchored field-permutation repair** (`fix_field_permutations` in `utils/providers/base.py`). Vision models don't just put the title in the name field — they emit whole permutations. Observed with qwen2.5vl on a real card: `title: "Victor Becattini"`, `company: "Vice Presidente Vendas Brasil"`, while the email (`victor.becattini@sandvik.com`) held the truth. The email is the most reliably-OCR'd field on a card, so it's used as the anchor:
+  - **Name recovery:** if the current name doesn't match the email local-part tokens but title/company matches ALL of them, the name is rotated into `fullName` (first/last re-derived); whatever the wrong field held is re-homed (role-like → title, domain-match → company, else → notes).
+  - **Title untangling:** a role-like company (multilingual wordlist) that doesn't mention the email domain moves to an empty `title`.
+  - **Company from domain:** empty company gets the email domain base title-cased (`sandvik.com` → `Sandvik`) — fill-empty-only, skipped for freemail/ISP domains (gmail, hotmail, uol, terra, …).
+  - Conservative gates: needs ≥2 name tokens in the email local part and a 100 % token match to rotate; accent-folded matching (`João` ↔ `joao`); correct extractions pass through byte-for-byte untouched.
+- Runs in the pipeline as `repair_cjk → fix_field_permutations → demote_title_misplaced_as_name`, wired into all three post-processing sites (provider results + both CardProcessor paths).
+- 10 new tests (`TestFieldPermutations`); 297 total pass. Verified live: re-scanning the exact HEIC that produced the scramble now yields name/title/company all correctly placed straight from OCR, before the QR fetch.
+
+---
+
 ## [2.1.26] — 2026-07-08
 
 ### Fixed

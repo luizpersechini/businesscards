@@ -151,3 +151,106 @@ class TestTitleDemotion:
         from utils.providers.base import demote_title_misplaced_as_name
 
         assert demote_title_misplaced_as_name(None) is None
+
+
+class TestFieldPermutations:
+    """Tests for fix_field_permutations — email-anchored repair of
+    name/title/company scrambles produced by vision models.
+
+    Canonical bug (real qwen2.5vl output): title held the person's name,
+    company held the job title, email held the truth.
+    """
+
+    def _fix(self, cd):
+        from utils.providers.base import fix_field_permutations
+
+        return fix_field_permutations(dict(cd))
+
+    def test_real_scan_scramble_fully_repaired(self):
+        out = self._fix(
+            {
+                "title": "Victor Becattini",
+                "company": "Vice Presidente Vendas Brasil",
+                "email": "victor.becattini@sandvik.com",
+            }
+        )
+        assert out["fullName"] == "Victor Becattini"
+        assert out["firstName"] == "Victor"
+        assert out["lastName"] == "Becattini"
+        assert out["title"] == "Vice Presidente Vendas Brasil"
+        assert out["company"] == "Sandvik"  # derived from email domain
+
+    def test_pure_fullname_title_swap(self):
+        out = self._fix(
+            {
+                "fullName": "Vice President Sales",
+                "title": "Victor Becattini",
+                "email": "victor.becattini@sandvik.com",
+            }
+        )
+        assert out["fullName"] == "Victor Becattini"
+        assert out["title"] == "Vice President Sales"  # displaced role re-homed
+
+    def test_correct_extraction_untouched(self):
+        cd = {
+            "fullName": "Eric Kohtakangas",
+            "title": "Senior Executive Vice President",
+            "company": "Cementation Canada Inc.",
+            "email": "eric.kohtakangas@cementation.com",
+        }
+        out = self._fix(cd)
+        assert out == cd
+
+    def test_freemail_domain_never_invents_company(self):
+        out = self._fix({"fullName": "John Smith", "email": "john.smith@gmail.com"})
+        assert not out.get("company")
+
+    def test_accented_name_matches_plain_ascii_email(self):
+        out = self._fix(
+            {
+                "title": "João Gusmão",
+                "company": "Diretor Comercial",
+                "email": "joao.gusmao@btgpactual.com",
+            }
+        )
+        assert out["fullName"] == "João Gusmão"
+        assert out["title"] == "Diretor Comercial"
+
+    def test_single_token_email_local_no_rotation(self):
+        # 'victor@' is too weak to anchor a rotation — leave fields alone.
+        out = self._fix({"title": "Victor Becattini", "email": "victor@sandvik.com"})
+        assert out["title"] == "Victor Becattini"
+        assert not out.get("fullName")
+
+    def test_no_email_is_noop(self):
+        cd = {"title": "Victor Becattini", "company": "Vice Presidente"}
+        assert self._fix(cd) == cd
+
+    def test_role_like_company_moved_to_empty_title(self):
+        # No name rotation needed; company still holds a job title.
+        out = self._fix(
+            {
+                "fullName": "Ana Souza",
+                "company": "Gerente de Vendas",
+                "email": "ana.souza@acme.com",
+            }
+        )
+        assert out["title"] == "Gerente de Vendas"
+        assert out["company"] == "Acme"
+
+    def test_company_mentioning_domain_not_demoted(self):
+        # Company text is role-ish AND mentions the domain -> leave it.
+        out = self._fix(
+            {
+                "fullName": "Ana Souza",
+                "company": "Sandvik Sales Division",
+                "email": "ana.souza@sandvik.com",
+            }
+        )
+        assert out["company"] == "Sandvik Sales Division"
+
+    def test_none_and_missing_safe(self):
+        from utils.providers.base import fix_field_permutations
+
+        assert fix_field_permutations(None) is None
+        assert fix_field_permutations({}) == {}

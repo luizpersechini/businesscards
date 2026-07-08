@@ -7,6 +7,7 @@ import abc
 import base64
 import re
 import time
+import unicodedata
 import numpy as np
 import cv2
 from PIL import Image
@@ -394,6 +395,165 @@ def demote_title_misplaced_as_name(contact_dict: Optional[Dict]) -> Optional[Dic
     return contact_dict
 
 
+# ─── Email-evidence field-permutation repair ─────────────────────────────────
+# Vision models don't just put the title in the name field — they produce
+# whole permutations, e.g. (observed with qwen2.5vl on a real card):
+#     title:   "Victor Becattini"                <- the person's NAME
+#     company: "Vice Presidente Vendas Brasil"   <- the person's TITLE
+#     email:   victor.becattini@sandvik.com      <- the ground truth
+# The email is the most reliably-OCR'd field on a card (exact charset, no
+# ambiguity) and usually encodes both the person (local part) and the company
+# (domain). We use it as an anchor to detect and rotate misplaced fields.
+
+# Freemail / ISP domains that say nothing about the employer — never used to
+# infer a company name.
+_GENERIC_EMAIL_DOMAINS = frozenset(
+    (
+        "gmail",
+        "googlemail",
+        "hotmail",
+        "outlook",
+        "yahoo",
+        "icloud",
+        "live",
+        "msn",
+        "aol",
+        "proton",
+        "protonmail",
+        "gmx",
+        "zoho",
+        "fastmail",
+        "yandex",
+        "qq",
+        "naver",
+        "mail",
+        "email",
+        "me",
+        "mac",
+        # Brazilian ISPs / portals
+        "uol",
+        "bol",
+        "terra",
+        "globo",
+        "ig",
+    )
+)
+
+
+def _fold_ascii(s: str) -> str:
+    """Lowercase + strip accents ('João' -> 'joao') for fuzzy matching."""
+    return unicodedata.normalize("NFKD", s).encode("ascii", "ignore").decode().lower()
+
+
+def _word_tokens(s: str) -> List[str]:
+    """Accent-folded alphabetic tokens of length >= 2."""
+    if not s or not isinstance(s, str):
+        return []
+    return [t for t in re.findall(r"[a-z]+", _fold_ascii(s)) if len(t) >= 2]
+
+
+def _email_name_tokens(email: str) -> List[str]:
+    """Person-name tokens from the email local part.
+
+    'victor.becattini@x' -> ['victor', 'becattini'].  Requires >= 2 tokens —
+    a single-token local ('victor@', 'vb123@') is too weak to anchor a
+    rotation and returns [].
+    """
+    local = email.split("@", 1)[0]
+    toks = [t for t in re.split(r"[._\-+]", local.lower()) if t.isalpha() and len(t) >= 2]
+    return toks if len(toks) >= 2 else []
+
+
+def _email_domain_base(email: str) -> str:
+    """Company-ish base of the email domain: 'sandvik.com' -> 'sandvik',
+    'empresa.com.br' -> 'empresa'."""
+    try:
+        dom = email.split("@", 1)[1].lower().strip()
+    except IndexError:
+        return ""
+    labels = [l for l in dom.split(".") if l and l != "www"]
+    return labels[0] if labels else ""
+
+
+def fix_field_permutations(contact_dict: Optional[Dict]) -> Optional[Dict]:
+    """Use the email address as ground truth to un-scramble name / title /
+    company when the vision model emitted them in the wrong fields.
+    Operates in-place; safe on None / non-dict / missing email.
+
+    Conservative by design — a rotation only happens when:
+      * the email local part has >= 2 name tokens, AND
+      * the current name does NOT match them, AND
+      * exactly the title or company field matches ALL of them.
+    Untangling company->title additionally requires the company text to be
+    role-like (multilingual wordlist) and NOT mention the email domain.
+    Correct extractions are left byte-for-byte untouched.
+    """
+    if not isinstance(contact_dict, dict):
+        return contact_dict
+    email = (contact_dict.get("email") or "").strip()
+    if not email or "@" not in email:
+        return contact_dict
+
+    name_toks = _email_name_tokens(email)
+    domain = _email_domain_base(email)
+
+    def _get(k: str) -> str:
+        return (contact_dict.get(k) or "").strip()
+
+    def _name_score(value: str) -> float:
+        """Fraction of email name-tokens present in the value."""
+        if not value or not name_toks:
+            return 0.0
+        toks = set(_word_tokens(value))
+        return sum(1 for t in name_toks if t in toks) / len(name_toks)
+
+    # ── Step 1: is the name where it belongs? ────────────────────────────
+    current_name = _get("fullName") or f"{_get('firstName')} {_get('lastName')}".strip()
+    if name_toks and _name_score(current_name) < 0.5:
+        # Look for the full name hiding in title / company.
+        candidates = [(f, _get(f)) for f in ("title", "company")]
+        best_field, best_value = max(candidates, key=lambda fv: _name_score(fv[1]))
+        if best_value and _name_score(best_value) == 1.0:
+            displaced = _get("fullName")
+            contact_dict["fullName"] = best_value
+            contact_dict[best_field] = None
+            # Re-derive first/last — the old ones came from the same
+            # scrambled output.
+            parts = best_value.split()
+            if len(parts) >= 2:
+                contact_dict["firstName"] = parts[0]
+                contact_dict["lastName"] = " ".join(parts[1:])
+            # Re-home whatever the wrong fullName was holding.
+            if displaced:
+                if _looks_like_title(displaced) and not _get("title"):
+                    contact_dict["title"] = displaced
+                elif domain and domain in _fold_ascii(displaced) and not _get("company"):
+                    contact_dict["company"] = displaced
+                else:
+                    notes = _get("notes")
+                    contact_dict["notes"] = f"{notes} | {displaced}".strip(" |")
+
+    # ── Step 2: company field holding a job title? ───────────────────────
+    company = _get("company")
+    if (
+        company
+        and _looks_like_title(company)
+        and not (domain and domain in _fold_ascii(company))
+        and not _get("title")
+    ):
+        contact_dict["title"] = company
+        contact_dict["company"] = None
+
+    # ── Step 3: company empty -> derive from a corporate email domain ────
+    # 'sandvik.com' -> 'Sandvik'. Skipped for freemail/ISP domains. This is
+    # a fill-empty-only fallback, consistent with the merge philosophy used
+    # everywhere else in the app.
+    if not _get("company") and domain and domain not in _GENERIC_EMAIL_DOMAINS and len(domain) >= 3:
+        contact_dict["company"] = domain.capitalize()
+
+    return contact_dict
+
+
 class VisionProvider(abc.ABC):
     """Abstract base class for vision/LLM providers."""
 
@@ -624,6 +784,10 @@ Rules:
         # Repair CJK substitutions (also reapplied centrally in
         # CardProcessor.extract_contact for the QR-only fast path).
         contact_dict = repair_cjk_substitutions(contact_dict)
+        # Un-scramble name/title/company permutations using the email as
+        # ground truth (runs first — with email evidence the name lands in
+        # the right field before the wordlist pass below).
+        contact_dict = fix_field_permutations(contact_dict)
         # Catch the common vision-model failure mode where the role text is
         # emitted as fullName. Moves it to title (if title was empty) and
         # blanks the name fields so a real name still gets pulled later.

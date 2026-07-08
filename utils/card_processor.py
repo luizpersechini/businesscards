@@ -207,10 +207,12 @@ class CardProcessor:
             try:
                 from utils.providers.base import (
                     demote_title_misplaced_as_name,
+                    fix_field_permutations,
                     repair_cjk_substitutions,
                 )
 
                 contact_data = repair_cjk_substitutions(contact_data)
+                contact_data = fix_field_permutations(contact_data)
                 contact_data = demote_title_misplaced_as_name(contact_data)
             except Exception as e:
                 logger.warning(f"CJK repair failed (non-fatal): {e}")
@@ -276,10 +278,12 @@ class CardProcessor:
         try:
             from utils.providers.base import (
                 demote_title_misplaced_as_name,
+                fix_field_permutations,
                 repair_cjk_substitutions,
             )
 
             contact_data = repair_cjk_substitutions(contact_data)
+            contact_data = fix_field_permutations(contact_data)
             contact_data = demote_title_misplaced_as_name(contact_data)
         except Exception as e:
             logger.warning(f"CJK repair failed (non-fatal): {e}")
