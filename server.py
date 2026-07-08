@@ -1564,6 +1564,120 @@ async def stop_scan():
 
 
 # ═══════════════════════════════════════════════════════════
+# MODEL BENCHMARK  (SSE streaming)
+# ═══════════════════════════════════════════════════════════
+
+_bench_cancel_event = threading.Event()
+
+
+async def _benchmark_generator(models: List[str], items: list, timeout: int):
+    """Run each model over each locked-contact card image, scoring against
+    the human-verified contact data. Yields SSE progress + a final results
+    event. QR data is deliberately not passed — vision quality only."""
+    from utils.model_benchmark import BenchAccumulator, score_card
+
+    loop = asyncio.get_event_loop()
+    total_steps = max(1, len(models) * len(items))
+    step = 0
+    results = []
+
+    for m_idx, model in enumerate(models):
+        acc = BenchAccumulator(model)
+        for i_idx, item in enumerate(items):
+            if _bench_cancel_event.is_set():
+                yield _sse({"stage": "stopped", "message": "Benchmark cancelled"})
+                return
+            step += 1
+            yield _sse(
+                {
+                    "stage": "bench",
+                    "progress": int(100 * (step - 1) / total_steps),
+                    "message": f"{model} — card {i_idx + 1}/{len(items)} ({item['label']})",
+                    "model": model,
+                    "card": i_idx + 1,
+                    "totalCards": len(items),
+                    "modelIndex": m_idx + 1,
+                    "totalModels": len(models),
+                }
+            )
+            await asyncio.sleep(0)
+
+            img = cv2.imread(item["image_path"])
+            if img is None:
+                acc.add(score_card(item["truth"], {}), 0, failed=True)
+                continue
+
+            try:
+                result = await loop.run_in_executor(
+                    None,
+                    lambda im=img, mo=model: _provider_factory.extract_with_fallback(
+                        im, None, timeout=timeout, model=mo
+                    ),
+                )
+                extracted = result.contact.to_legacy_dict() if result.contact else {}
+                failed = bool(result.error) or not result.contact.has_minimum_data()
+                acc.add(
+                    score_card(item["truth"], extracted),
+                    result.processing_time_ms,
+                    failed=failed,
+                )
+            except Exception as e:
+                logger_msg = f"benchmark extract failed ({model}): {e}"
+                print(logger_msg)
+                acc.add(score_card(item["truth"], {}), 0, failed=True)
+
+        results.append(acc.summary())
+
+    results.sort(key=lambda r: r["overall"]["pct"], reverse=True)
+    yield _sse({"stage": "done", "results": results, "items": len(items)})
+
+
+@app.post("/api/benchmark")
+async def run_model_benchmark(request: Request):
+    """Benchmark vision models against locked (human-verified) contacts.
+
+    Body: {"models": ["glm-ocr", ...], "limit": 10, "timeout": 180}
+    Returns the same SSE event shape as /api/scan. Ground truth = locked
+    contacts whose card_id resolves to an archived card image.
+    """
+    from utils.model_benchmark import collect_items
+
+    try:
+        body = await request.json()
+        if not isinstance(body, dict):
+            body = {}
+    except Exception:
+        body = {}
+
+    models = [m for m in (body.get("models") or []) if isinstance(m, str) and m.strip()]
+    if not models:
+        raise HTTPException(status_code=400, detail="No models given")
+    limit = max(1, min(int(body.get("limit") or 10), 200))
+    timeout = max(10, min(int(body.get("timeout") or 180), 600))
+
+    items = collect_items(_contacts.get_all(), THUMBNAIL_DIR, limit)
+    if not items:
+        raise HTTPException(
+            status_code=400,
+            detail="No benchmark items — lock some contacts first (locked contacts with an archived card image are the ground truth).",
+        )
+
+    _bench_cancel_event.clear()
+    return StreamingResponse(
+        _benchmark_generator(models, items, timeout),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+@app.post("/api/benchmark/stop")
+async def stop_benchmark():
+    """Stop the in-flight benchmark after the current card finishes."""
+    _bench_cancel_event.set()
+    return {"status": "stopping"}
+
+
+# ═══════════════════════════════════════════════════════════
 # CONTACTS
 # ═══════════════════════════════════════════════════════════
 

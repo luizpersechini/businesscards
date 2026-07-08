@@ -2,6 +2,22 @@
 
 All notable changes to the Business Card Scanner project will be documented in this file.
 
+## [2.1.28] — 2026-07-08
+
+### Fixed
+
+- **The model you picked in the UI was never actually used.** `CardProcessor.extract_contact` received `vision_model`, logged it, and dropped it — `ProviderFactory.extract_with_fallback` had no model parameter at all. Worse, the Ollama provider's `check_availability()` overwrites its configured model with _whichever vision model is currently loaded in Ollama's memory_ (a swap-cost optimisation). Net effect: scans and "Relaunch with model X" silently ran on the loaded model while history metadata recorded the requested one. **All past model comparisons are unreliable.** `extract_with_fallback` now accepts `model=` and applies it to the matching provider's config after the availability check (so the explicit request wins); `claude-*`/`gpt-*` strings route to their cloud providers, everything else to Ollama. Regression-tested.
+
+### Added
+
+- **Model benchmark against your verified contacts** ("Benchmark" button, Contacts tab). Your locked contacts are human-reviewed ground truth, and each carries the cropped card image it was extracted from. The benchmark re-runs extraction on those images with each selected model and scores field-level accuracy against the locked data — answering "which model should I default to?" with your own cards instead of vibes.
+  - Backend: `utils/model_benchmark.py` (normalisation + scoring + item collection) and `POST /api/benchmark` (SSE progress, `POST /api/benchmark/stop` to cancel). QR data is deliberately excluded (pure vision comparison); the app's normal post-processing (CJK repair, permutation fix, title demotion) is included, so scores reflect what you actually get.
+  - Scoring: only truth-populated fields count; accent-folded/containment matching for text (`Sandvik` vs `Sandvik Mining and Rock Solutions` is not an error); digits-suffix matching for phones with phone/mobile pooled (models swap the slots); scheme/www-stripped websites.
+  - Frontend: modal with installed-model checkboxes (catalogue models preselected), card-count limit, live progress, ranked results table (per-field %, overall %, avg seconds, failure count; winner highlighted).
+- 17 new tests (matching, scoring, item collection, accumulator math, model routing). 314 total pass. Verified live: 2-card × glm-ocr run streams progress and returns ranked per-field scores.
+
+---
+
 ## [2.1.27] — 2026-07-08
 
 ### Added

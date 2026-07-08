@@ -6278,6 +6278,459 @@
         );
       }
 
+      // ─── Model Benchmark Modal ────────────────────────────────────────────────────
+      // Re-scans the card images behind your locked (human-verified) contacts
+      // with each selected model and scores field-level accuracy against the
+      // verified data. Answers "which model should I default to?" with your
+      // own cards instead of vibes.
+      function BenchmarkModal({ lockedCount, onClose }) {
+        const [available, setAvailable] = useState([]); // installed ollama models
+        const [selected, setSelected] = useState(new Set());
+        const [limit, setLimit] = useState(10);
+        const [running, setRunning] = useState(false);
+        const [progress, setProgress] = useState(null); // {pct, message}
+        const [results, setResults] = useState(null);
+        const [itemCount, setItemCount] = useState(0);
+        const [error, setError] = useState(null);
+
+        // Installed models, with the curated catalogue ones preselected.
+        useEffect(() => {
+          window
+            .apiGet("/api/status")
+            .then((s) => {
+              const models = s.models || [];
+              setAvailable(models);
+              const pre = new Set();
+              models.forEach((m) => {
+                if (
+                  VISION_MODELS.some(
+                    (v) =>
+                      m === v.id || m.startsWith(v.id) || v.id.startsWith(m),
+                  )
+                )
+                  pre.add(m);
+              });
+              setSelected(pre);
+            })
+            .catch(() => setAvailable([]));
+        }, []);
+
+        const toggle = (m) =>
+          setSelected((prev) => {
+            const next = new Set(prev);
+            if (next.has(m)) next.delete(m);
+            else next.add(m);
+            return next;
+          });
+
+        const handleRun = async () => {
+          if (selected.size === 0 || running) return;
+          setRunning(true);
+          setError(null);
+          setResults(null);
+          setProgress({ pct: 0, message: "Starting…" });
+          try {
+            const r = await fetch("/api/benchmark", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                models: Array.from(selected),
+                limit: Number(limit) || 10,
+              }),
+            });
+            if (!r.ok) {
+              const detail = await r.text().catch(() => "");
+              throw new Error("HTTP " + r.status + ": " + detail.slice(0, 200));
+            }
+            const reader = r.body.getReader();
+            const decoder = new TextDecoder();
+            let buffer = "";
+            let done = false;
+            while (!done) {
+              const chunk = await reader.read();
+              if (chunk.done) break;
+              buffer += decoder.decode(chunk.value, { stream: true });
+              const lines = buffer.split("\n");
+              buffer = lines.pop();
+              for (const line of lines) {
+                if (!line.startsWith("data: ")) continue;
+                const evt = JSON.parse(line.slice(6));
+                if (evt.stage === "done") {
+                  setResults(evt.results || []);
+                  setItemCount(evt.items || 0);
+                  setProgress(null);
+                  done = true;
+                  break;
+                }
+                if (evt.stage === "stopped") {
+                  setProgress(null);
+                  done = true;
+                  break;
+                }
+                if (evt.stage === "bench") {
+                  setProgress({
+                    pct: evt.progress || 0,
+                    message: evt.message || "",
+                  });
+                }
+              }
+            }
+          } catch (err) {
+            setError(err.message);
+            setProgress(null);
+          } finally {
+            setRunning(false);
+          }
+        };
+
+        const handleStop = () => {
+          fetch("/api/benchmark/stop", { method: "POST" }).catch(() => {});
+        };
+
+        const FIELD_COLS = [
+          ["fullName", "Name"],
+          ["title", "Title"],
+          ["company", "Company"],
+          ["email", "Email"],
+          ["phone", "Phone"],
+          ["mobile", "Mobile"],
+          ["website", "Web"],
+        ];
+
+        const pctColor = (p) =>
+          p >= 80
+            ? "var(--success)"
+            : p >= 50
+              ? "var(--warning)"
+              : "var(--danger)";
+
+        return (
+          <div
+            onClick={running ? undefined : onClose}
+            style={{
+              position: "fixed",
+              inset: 0,
+              backgroundColor: "rgba(0,0,0,0.5)",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              zIndex: 10000,
+              backdropFilter: "blur(4px)",
+            }}
+          >
+            <div
+              onClick={(e) => e.stopPropagation()}
+              style={{
+                backgroundColor: "var(--surface)",
+                borderRadius: "var(--radius-lg)",
+                width: "92%",
+                maxWidth: 720,
+                maxHeight: "90vh",
+                overflow: "auto",
+                boxShadow: "var(--shadow-lg)",
+                padding: "20px 24px",
+              }}
+            >
+              <div
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  marginBottom: 6,
+                }}
+              >
+                <div style={{ fontSize: 16, fontWeight: 700 }}>
+                  Model benchmark
+                </div>
+                <div style={{ flex: 1 }} />
+                <button
+                  onClick={onClose}
+                  disabled={running}
+                  style={{
+                    border: "none",
+                    background: "none",
+                    fontSize: 20,
+                    cursor: running ? "not-allowed" : "pointer",
+                    color: "var(--text-tertiary)",
+                  }}
+                >
+                  ×
+                </button>
+              </div>
+              <div
+                style={{
+                  fontSize: 12,
+                  color: "var(--text-secondary)",
+                  marginBottom: 14,
+                  lineHeight: 1.5,
+                }}
+              >
+                Re-scans the card images behind your{" "}
+                <strong>{lockedCount} locked contacts</strong> with each
+                selected model and scores every field against your verified
+                data. QR codes are excluded — this measures pure vision
+                extraction (with the app's normal post-processing).
+              </div>
+
+              {/* Model checkboxes */}
+              <div
+                style={{
+                  display: "flex",
+                  flexWrap: "wrap",
+                  gap: 8,
+                  marginBottom: 12,
+                }}
+              >
+                {available.length === 0 && (
+                  <span style={{ fontSize: 12, color: "var(--text-tertiary)" }}>
+                    No models reported by Ollama.
+                  </span>
+                )}
+                {available.map((m) => (
+                  <label
+                    key={m}
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      gap: 6,
+                      padding: "5px 10px",
+                      borderRadius: 99,
+                      border: `1px solid ${selected.has(m) ? "var(--accent)" : "var(--border)"}`,
+                      background: selected.has(m)
+                        ? "var(--accent-soft)"
+                        : "var(--bg)",
+                      fontSize: 12,
+                      cursor: "pointer",
+                    }}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={selected.has(m)}
+                      onChange={() => toggle(m)}
+                      disabled={running}
+                      style={{ margin: 0 }}
+                    />
+                    {m}
+                  </label>
+                ))}
+              </div>
+
+              {/* Limit + run */}
+              <div
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 10,
+                  marginBottom: 14,
+                }}
+              >
+                <label style={{ fontSize: 12, color: "var(--text-secondary)" }}>
+                  Cards:
+                </label>
+                <input
+                  type="number"
+                  min={1}
+                  max={Math.max(lockedCount, 1)}
+                  value={limit}
+                  disabled={running}
+                  onChange={(e) => setLimit(e.target.value)}
+                  style={{
+                    width: 64,
+                    padding: "5px 8px",
+                    border: "1px solid var(--border)",
+                    borderRadius: 6,
+                    background: "var(--bg)",
+                    color: "var(--text-primary)",
+                    fontSize: 12,
+                    fontFamily: "inherit",
+                  }}
+                />
+                <span style={{ fontSize: 11, color: "var(--text-tertiary)" }}>
+                  ≈ {Math.max(1, Number(limit) || 10) * selected.size}{" "}
+                  extractions — expect ~5-30 s each
+                </span>
+                <div style={{ flex: 1 }} />
+                {running ? (
+                  <Btn size="sm" variant="danger" onClick={handleStop}>
+                    Stop
+                  </Btn>
+                ) : (
+                  <Btn
+                    size="sm"
+                    variant="primary"
+                    icon={Icons.bolt}
+                    disabled={selected.size === 0}
+                    onClick={handleRun}
+                  >
+                    Run benchmark
+                  </Btn>
+                )}
+              </div>
+
+              {/* Progress */}
+              {progress && (
+                <div style={{ marginBottom: 14 }}>
+                  <div
+                    style={{
+                      height: 6,
+                      borderRadius: 3,
+                      background: "var(--bg)",
+                      overflow: "hidden",
+                      marginBottom: 6,
+                    }}
+                  >
+                    <div
+                      style={{
+                        width: `${progress.pct}%`,
+                        height: "100%",
+                        background: "var(--accent)",
+                        transition: "width 0.3s",
+                      }}
+                    />
+                  </div>
+                  <div style={{ fontSize: 11, color: "var(--text-secondary)" }}>
+                    {progress.message}
+                  </div>
+                </div>
+              )}
+
+              {error && (
+                <div
+                  style={{
+                    fontSize: 12,
+                    color: "var(--danger)",
+                    marginBottom: 12,
+                  }}
+                >
+                  ✗ {error}
+                </div>
+              )}
+
+              {/* Results table */}
+              {results && (
+                <div style={{ overflowX: "auto" }}>
+                  <div
+                    style={{
+                      fontSize: 12,
+                      fontWeight: 600,
+                      marginBottom: 6,
+                    }}
+                  >
+                    Results — {itemCount} card{itemCount !== 1 ? "s" : ""},
+                    field accuracy vs your verified data
+                  </div>
+                  <table
+                    style={{
+                      borderCollapse: "collapse",
+                      width: "100%",
+                      fontSize: 12,
+                    }}
+                  >
+                    <thead>
+                      <tr>
+                        {[
+                          "Model",
+                          ...FIELD_COLS.map(([, l]) => l),
+                          "Overall",
+                          "Avg",
+                        ].map((h) => (
+                          <th
+                            key={h}
+                            style={{
+                              textAlign: "left",
+                              padding: "6px 8px",
+                              borderBottom: "2px solid var(--border)",
+                              color: "var(--text-secondary)",
+                              fontWeight: 600,
+                              whiteSpace: "nowrap",
+                            }}
+                          >
+                            {h}
+                          </th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {results.map((r, i) => (
+                        <tr
+                          key={r.model}
+                          style={{
+                            background:
+                              i === 0 ? "var(--success-soft)" : "transparent",
+                          }}
+                        >
+                          <td
+                            style={{
+                              padding: "6px 8px",
+                              fontWeight: i === 0 ? 700 : 500,
+                              whiteSpace: "nowrap",
+                            }}
+                          >
+                            {i === 0 ? "🏆 " : ""}
+                            {r.model}
+                            {r.failures > 0 && (
+                              <span
+                                title={`${r.failures} extraction failure(s)`}
+                                style={{
+                                  color: "var(--danger)",
+                                  marginLeft: 4,
+                                  fontSize: 10,
+                                }}
+                              >
+                                ({r.failures}✗)
+                              </span>
+                            )}
+                          </td>
+                          {FIELD_COLS.map(([f]) => {
+                            const cell = r.fields[f];
+                            return (
+                              <td
+                                key={f}
+                                title={
+                                  cell ? `${cell.ok}/${cell.total}` : "no data"
+                                }
+                                style={{
+                                  padding: "6px 8px",
+                                  color: cell
+                                    ? pctColor(cell.pct)
+                                    : "var(--text-tertiary)",
+                                  fontVariantNumeric: "tabular-nums",
+                                }}
+                              >
+                                {cell ? `${cell.pct}%` : "—"}
+                              </td>
+                            );
+                          })}
+                          <td
+                            style={{
+                              padding: "6px 8px",
+                              fontWeight: 700,
+                              color: pctColor(r.overall.pct),
+                              fontVariantNumeric: "tabular-nums",
+                            }}
+                            title={`${r.overall.ok}/${r.overall.total} fields`}
+                          >
+                            {r.overall.pct}%
+                          </td>
+                          <td
+                            style={{
+                              padding: "6px 8px",
+                              color: "var(--text-secondary)",
+                              whiteSpace: "nowrap",
+                            }}
+                          >
+                            {(r.avg_ms / 1000).toFixed(1)}s
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+          </div>
+        );
+      }
+
       function ContactsTab({ tweaks, densityPad }) {
         const [contacts, setContacts] = useState([]);
         const [loading, setLoading] = useState(true);
@@ -6287,6 +6740,7 @@
         const [expandedId, setExpandedId] = useState(null);
         const [exportDone, setExportDone] = useState("");
         const [editingContact, setEditingContact] = useState(null);
+        const [showBenchmark, setShowBenchmark] = useState(false);
         // Which company groups are currently open. Default: all open.
         // Tracked here (not in each CompanyGroup) so a single button in
         // the toolbar can collapse / expand them all at once.
@@ -6616,6 +7070,16 @@
 
                 <div style={{ flex: 1 }} />
 
+                {/* Model benchmark — locked contacts are the ground truth */}
+                <Btn
+                  size="sm"
+                  variant="secondary"
+                  icon={Icons.bolt}
+                  onClick={() => setShowBenchmark(true)}
+                >
+                  Benchmark
+                </Btn>
+
                 {/* Export buttons */}
                 <div style={{ display: "flex", gap: 6 }}>
                   {["VCF", "Excel", "CSV"].map((fmt) => (
@@ -6806,6 +7270,13 @@
                 card={editingContact}
                 onSave={handleEditSave}
                 onClose={() => setEditingContact(null)}
+              />
+            )}
+
+            {showBenchmark && (
+              <BenchmarkModal
+                lockedCount={contacts.filter((c) => c.locked).length}
+                onClose={() => setShowBenchmark(false)}
               />
             )}
           </div>

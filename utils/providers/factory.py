@@ -16,8 +16,12 @@ from .claude_provider import ClaudeVisionProvider
 from .openai_provider import OpenAIVisionProvider
 
 from ..models import (
-    ProviderType, ProviderStatus, ProviderConfig,
-    ScanResult, BatchScanResult, ContactInfo
+    ProviderType,
+    ProviderStatus,
+    ProviderConfig,
+    ScanResult,
+    BatchScanResult,
+    ContactInfo,
 )
 
 
@@ -131,7 +135,9 @@ class ProviderFactory:
             }
         return statuses
 
-    def get_best_provider(self, preferred: Optional[ProviderType] = None) -> Optional[VisionProvider]:
+    def get_best_provider(
+        self, preferred: Optional[ProviderType] = None
+    ) -> Optional[VisionProvider]:
         """
         Get the best available provider following LOCAL-FIRST priority.
 
@@ -152,10 +158,23 @@ class ProviderFactory:
                 continue
             status = self.check_provider_status(config.provider_type)
             if status == ProviderStatus.AVAILABLE:
-                logger.info(f"Selected provider: {config.provider_type.value} (priority {config.priority})")
+                logger.info(
+                    f"Selected provider: {config.provider_type.value} (priority {config.priority})"
+                )
                 return self._get_or_create_provider(config)
 
         return None
+
+    @staticmethod
+    def _model_provider_type(model: str) -> ProviderType:
+        """Which provider a UI model string belongs to. 'claude-*' → Claude,
+        'gpt-*' → OpenAI, everything else is an Ollama tag."""
+        m = (model or "").lower()
+        if m.startswith("claude"):
+            return ProviderType.CLAUDE
+        if m.startswith("gpt"):
+            return ProviderType.OPENAI
+        return ProviderType.OLLAMA
 
     def extract_with_fallback(
         self,
@@ -163,19 +182,30 @@ class ProviderFactory:
         qr_data: Optional[Dict] = None,
         preferred: Optional[ProviderType] = None,
         timeout: Optional[int] = None,
+        model: Optional[str] = None,
     ) -> ScanResult:
         """
         Extract contact with automatic fallback through providers.
         Tries each provider in priority order until one succeeds.
+
+        `model`, when given, is applied to the matching provider's config
+        right before the call. Without this, the model the user picked in
+        the UI never reached the provider at all: the Ollama provider's
+        check_availability() overwrites config.model_name with whichever
+        vision model happens to be loaded in Ollama's memory, so scans and
+        relaunches silently ran on the loaded model while history recorded
+        the *requested* one. Setting it here — after the availability check
+        has run — makes the explicit request win.
         """
         errors = []
+        model_target = self._model_provider_type(model) if model else None
 
         # Build ordered list: preferred first, then by priority
         ordered_configs = sorted(self.configs, key=lambda c: c.priority)
         if preferred:
             ordered_configs = sorted(
                 ordered_configs,
-                key=lambda c: (0 if c.provider_type == preferred else 1, c.priority)
+                key=lambda c: (0 if c.provider_type == preferred else 1, c.priority),
             )
 
         LOCAL_PROVIDERS = (ProviderType.OLLAMA, ProviderType.VLLM)
@@ -200,6 +230,12 @@ class ProviderFactory:
             if timeout is not None and config.provider_type not in LOCAL_PROVIDERS:
                 config.timeout = timeout
 
+            # Honour the explicitly-requested model. Must happen AFTER
+            # check_provider_status(), which (for Ollama) may have replaced
+            # config.model_name with whatever model is currently loaded.
+            if model and config.provider_type == model_target:
+                config.model_name = model
+
             logger.info(f"Trying provider: {config.provider_type.value} ({config.model_name})")
             result = provider.extract_contact(card_image, qr_data)
 
@@ -207,11 +243,7 @@ class ProviderFactory:
                 return result
 
             # Build a descriptive error — never log bare "None"
-            fail_reason = (
-                result.error
-                if result.error
-                else "extracted no usable contact data"
-            )
+            fail_reason = result.error if result.error else "extracted no usable contact data"
             errors.append(f"{config.provider_type.value}: {fail_reason}")
             logger.warning(f"Provider {config.provider_type.value} failed: {fail_reason}")
 
@@ -221,7 +253,7 @@ class ProviderFactory:
             confidence=0.0,
             provider_used=ProviderType.OLLAMA,
             processing_time_ms=0,
-            error=f"All providers failed. Errors: {'; '.join(errors)}"
+            error=f"All providers failed. Errors: {'; '.join(errors)}",
         )
 
     def batch_extract(
@@ -284,7 +316,7 @@ class ProviderFactory:
             if status != ProviderStatus.AVAILABLE:
                 continue
             provider = self._get_or_create_provider(config)
-            if provider and hasattr(provider, 'warmup'):
+            if provider and hasattr(provider, "warmup"):
                 ok = provider.warmup()
                 return ok, config.provider_type.value
         return False, "none"

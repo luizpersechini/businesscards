@@ -234,7 +234,7 @@ class CardProcessor:
         logger.info(f"Running vision analysis (model: {vision_model}, timeout: {vision_timeout}s)")
         try:
             scan_result = self.provider_factory.extract_with_fallback(
-                card_image_bgr, qr_data, timeout=vision_timeout
+                card_image_bgr, qr_data, timeout=vision_timeout, model=vision_model
             )
 
             if scan_result.contact and scan_result.contact.has_minimum_data():
