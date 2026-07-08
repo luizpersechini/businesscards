@@ -2255,4 +2255,13 @@ if __name__ == "__main__":
     # which collides with the user's Streamlit projects. Override with
     # the PORT env var if needed.
     port = int(os.environ.get("PORT", "9247"))
-    uvicorn.run("server:app", host="0.0.0.0", port=port, reload=True)
+
+    # Auto-reload is OFF by default. With reload=True uvicorn runs a reloader
+    # parent that binds the socket and a child that serves. If the child dies
+    # hard (e.g. a native segfault in an image/QR library), the parent keeps
+    # the port bound: the browser's TCP connect succeeds but no HTTP response
+    # ever arrives, so the page just hangs forever with no error anywhere.
+    # Without the reloader a crash simply ends the process and frees the port,
+    # which fails loudly instead of silently. Set RELOAD=1 for dev.
+    reload = os.environ.get("RELOAD", "").strip().lower() in ("1", "true", "yes")
+    uvicorn.run("server:app", host="0.0.0.0", port=port, reload=reload)

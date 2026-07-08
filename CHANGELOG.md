@@ -2,6 +2,21 @@
 
 All notable changes to the Business Card Scanner project will be documented in this file.
 
+## [2.1.26] — 2026-07-08
+
+### Fixed
+
+- **`localhost:9247` hung forever after starting a scan.** The uvicorn worker was dying with a **SIGSEGV inside `libzbar.0.dylib` (`_zbar_scan_image`)**, called through ctypes by **pyzbar**. Crash report: `EXC_BAD_ACCESS / KERN_INVALID_ADDRESS at 0xffffffffffffffff`.
+  - **pyzbar is now disabled by default.** pyzbar 0.1.9 (its latest release) doesn't declare `restype` for several pointer-returning libzbar functions; on arm64 the pointer is truncated and libzbar dereferences garbage. Reproduced deterministically here (zbar 0.23.93 + pyzbar 0.1.9 + CPython 3.13): **every** `pyzbar.decode()` segfaults, even on a blank 64×64 array, via the numpy, PIL _and_ raw-bytes paths. `zbarimg` (libzbar directly) is stable, so the fault is in pyzbar's binding, not the library. Opt back in with `USE_PYZBAR=1`.
+  - **No functionality lost.** pyzbar was never actually used in this deployment: the system Python is SIP-protected, so macOS strips `DYLD_LIBRARY_PATH` and the `from pyzbar import pyzbar` always raised `ImportError`, silently falling back to the OpenCV QR detectors. Switching to a `.venv` (a non-SIP interpreter) let `DYLD_LIBRARY_PATH` through and armed the bomb. The OpenCV path decodes these cards fine — verified it still reads `https://my.mobiz.pro/victorbecattini/` off the same HEIC.
+- **Auto-reload is now off by default** (`RELOAD=1` to enable). This is what turned a crash into a _silent hang_: with `reload=True` the reloader parent binds the socket and a child serves. When the child segfaulted, the parent kept the port bound — TCP connects succeeded, no HTTP response ever came, and the browser spun with no error in any log. Without the reloader a crash just ends the process and frees the port, which fails loudly. (A segfault cannot be caught with `try/except`, so preventing the crash _and_ removing the wedge are both necessary.)
+
+### Notes
+
+- Verified end-to-end: a real scan of the HEIC that previously killed the worker now completes (`warmup → detect → extract → generate → done`), yields **one** card with `qrUrl` set, and leaves the server responsive. 287 tests pass.
+
+---
+
 ## [2.1.25] — 2026-07-08
 
 ### Fixed
