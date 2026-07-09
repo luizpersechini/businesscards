@@ -82,6 +82,45 @@ def repair_cjk_substitutions(contact_dict: Optional[Dict]) -> Optional[Dict]:
     return contact_dict
 
 
+# ─── Prompt-echo stripping ───────────────────────────────────────────────────
+# Weaker vision models sometimes copy fragments of OUR extraction prompt into
+# the output instead of reading the card. Observed in production: the old
+# glossary line "Gerente=Manager, Diretor=Director, Presidente=President"
+# emitted verbatim as the contact's title. The glossary is gone from the
+# prompt, but this guard heals any lingering echo pattern: runs of "X=Y"
+# pairs never occur in real card fields.
+_GLOSSARY_PAIR_RE = re.compile(r"[\wÀ-ÖØ-öø-ÿ]+\s*=\s*[\wÀ-ÖØ-öø-ÿ]+[,;]?\s*")
+_ECHO_FIELDS = ("fullName", "firstName", "lastName", "title", "company", "notes")
+
+
+def _strip_echo_from_text(value: str) -> Optional[str]:
+    """Remove glossary-style 'X=Y' runs from a field value.
+
+    A single stray '=' pair is left alone (could be legit in notes); two or
+    more pairs is unmistakably a prompt echo. Returns the cleaned string, or
+    None when nothing meaningful survives.
+    """
+    if not isinstance(value, str) or "=" not in value:
+        return value
+    if len(_GLOSSARY_PAIR_RE.findall(value)) < 2:
+        return value
+    cleaned = _GLOSSARY_PAIR_RE.sub("", value)
+    cleaned = re.sub(r"\s{2,}", " ", cleaned).strip(" ,;:-|")
+    return cleaned or None
+
+
+def strip_prompt_echoes(contact_dict: Optional[Dict]) -> Optional[Dict]:
+    """Clear prompt-echo artifacts from text fields, in place. Safe on
+    None / non-dict."""
+    if not isinstance(contact_dict, dict):
+        return contact_dict
+    for k in _ECHO_FIELDS:
+        v = contact_dict.get(k)
+        if isinstance(v, str):
+            contact_dict[k] = _strip_echo_from_text(v)
+    return contact_dict
+
+
 # ─── Title-in-name detection ─────────────────────────────────────────────────
 # Vision models routinely confuse a job title for the person's name when the
 # title is the largest text block on the card (common layout). We detect by
@@ -718,7 +757,7 @@ Rules:
 - Leave as null any field not visible on the card
 - firstName + lastName OR fullName (not both)
 - Keep phone numbers exactly as printed; add country code only if shown (+55 for Brazil)
-- Portuguese job titles: Gerente=Manager, Diretor=Director, Presidente=President
+- Keep job titles exactly as printed, in their original language (Portuguese/Spanish titles stay untranslated)
 - CRITICAL: Use ONLY Latin characters (a-z, A-Z) with proper Western European accents (é, è, ê, à, ã, â, ç, ñ, ü, ö, ô). NEVER substitute non-Latin characters (Chinese 矇/癟/瓊, Japanese, Korean, etc.) for accented Latin letters. If unsure, use the unaccented letter instead.
 - Return ONLY the JSON object. No markdown, no explanation, no extra text."""
         return prompt
@@ -784,6 +823,8 @@ Rules:
         # Repair CJK substitutions (also reapplied centrally in
         # CardProcessor.extract_contact for the QR-only fast path).
         contact_dict = repair_cjk_substitutions(contact_dict)
+        # Drop prompt-echo artifacts before any field-level reasoning.
+        contact_dict = strip_prompt_echoes(contact_dict)
         # Un-scramble name/title/company permutations using the email as
         # ground truth (runs first — with email evidence the name lands in
         # the right field before the wordlist pass below).

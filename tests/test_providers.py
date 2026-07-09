@@ -254,3 +254,40 @@ class TestFieldPermutations:
 
         assert fix_field_permutations(None) is None
         assert fix_field_permutations({}) == {}
+
+
+class TestPromptEchoStrip:
+    """strip_prompt_echoes — models copying our prompt's glossary line
+    ('Gerente=Manager, Diretor=Director, Presidente=President') into fields."""
+
+    def _strip(self, cd):
+        from utils.providers.base import strip_prompt_echoes
+
+        return strip_prompt_echoes(dict(cd))
+
+    def test_exact_glossary_cleared(self):
+        out = self._strip({"title": "Gerente=Manager, Diretor=Director, Presidente=President"})
+        assert out["title"] is None
+
+    def test_glossary_embedded_keeps_rest(self):
+        out = self._strip({"title": "Diretor Comercial Gerente=Manager, Diretor=Director"})
+        assert out["title"] == "Diretor Comercial"
+
+    def test_single_pair_left_alone(self):
+        # One '=' could be legitimate (e.g. notes); only runs of pairs are echoes.
+        out = self._strip({"notes": "stand B12 = hall 3"})
+        assert out["notes"] == "stand B12 = hall 3"
+
+    def test_normal_fields_untouched(self):
+        cd = {"title": "Vice Presidente Vendas Brasil", "company": "Sandvik"}
+        assert self._strip(cd) == cd
+
+    def test_none_safe(self):
+        from utils.providers.base import strip_prompt_echoes
+
+        assert strip_prompt_echoes(None) is None
+
+    def test_prompt_no_longer_contains_glossary(self):
+        from utils.providers.base import VisionProvider
+
+        assert "Gerente=Manager" not in VisionProvider.build_extraction_prompt()

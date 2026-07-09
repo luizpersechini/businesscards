@@ -209,9 +209,11 @@ class CardProcessor:
                     demote_title_misplaced_as_name,
                     fix_field_permutations,
                     repair_cjk_substitutions,
+                    strip_prompt_echoes,
                 )
 
                 contact_data = repair_cjk_substitutions(contact_data)
+                contact_data = strip_prompt_echoes(contact_data)
                 contact_data = fix_field_permutations(contact_data)
                 contact_data = demote_title_misplaced_as_name(contact_data)
             except Exception as e:
@@ -280,9 +282,11 @@ class CardProcessor:
                 demote_title_misplaced_as_name,
                 fix_field_permutations,
                 repair_cjk_substitutions,
+                strip_prompt_echoes,
             )
 
             contact_data = repair_cjk_substitutions(contact_data)
+            contact_data = strip_prompt_echoes(contact_data)
             contact_data = fix_field_permutations(contact_data)
             contact_data = demote_title_misplaced_as_name(contact_data)
         except Exception as e:

@@ -2,6 +2,18 @@
 
 All notable changes to the Business Card Scanner project will be documented in this file.
 
+## [2.1.30] — 2026-07-08
+
+### Fixed
+
+- **Contacts with `title: "Gerente=Manager, Diretor=Director, Presidente=President"`.** That string is a fragment of OUR extraction prompt — a Portuguese-glossary hint line — which weaker vision models copied verbatim into the title field instead of reading the card. Three-part fix:
+  - The glossary line is gone from the prompt (replaced with "keep job titles exactly as printed, in their original language" — we never wanted translated titles anyway).
+  - New `strip_prompt_echoes` post-processing pass: any field value containing a run of two or more `X=Y` glossary pairs (a pattern that never occurs on real cards) has the echo removed, keeping whatever legitimate text surrounds it. Runs first in the repair chain at all three post-processing sites. A single stray `=` (e.g. in notes) is left alone.
+  - **Stored data scrubbed:** 4 contacts had the glossary as their title; cleared and their VCFs regenerated (backup written alongside, as always).
+- 6 new tests, including a guard that the extraction prompt never contains the glossary again. 328 total pass.
+
+---
+
 ## [2.1.29] — 2026-07-08
 
 ### Changed
