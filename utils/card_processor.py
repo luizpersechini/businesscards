@@ -148,7 +148,7 @@ class CardProcessor:
     def extract_contact(
         self,
         card_image_bgr: np.ndarray,
-        vision_model: str = "glm-ocr",
+        vision_model: str = "qwen2.5vl:7b",
         vision_timeout: int = 300,
     ) -> tuple:
         """
@@ -301,7 +301,7 @@ class CardProcessor:
         self,
         card_image_bgr: np.ndarray,
         card_image_rgb: Optional[np.ndarray] = None,
-        vision_model: str = "glm-ocr",
+        vision_model: str = "qwen2.5vl:7b",
         vision_timeout: int = 300,
     ) -> Optional[Dict]:
         """
@@ -346,7 +346,7 @@ class CardProcessor:
         image_bgr: np.ndarray,
         image_rgb: Optional[np.ndarray] = None,
         detection_mode: str = "Automatic",
-        vision_model: str = "glm-ocr",
+        vision_model: str = "qwen2.5vl:7b",
         vision_timeout: int = 300,
         grid_rows: int = 2,
         grid_cols: int = 2,

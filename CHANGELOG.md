@@ -2,6 +2,22 @@
 
 All notable changes to the Business Card Scanner project will be documented in this file.
 
+## [2.1.31] — 2026-07-08
+
+### Changed
+
+- **Default vision model is now `qwen2.5vl:7b`** (was `glm-ocr`). Driven by the benchmark against the user's own locked contacts: qwen won overall (~84% field accuracy — perfect email + website), while glm-ocr, though fastest, is OCR-only and weakest on full-contact fields. Updated every default site: scan endpoint, relaunch fallback, `AppConfig` (`vision_model` + `ollama_preload_model`), `CardProcessor` signatures, the Ollama provider config + `DEFAULT_VISION_MODELS` ordering, and the frontend picker default. The `VISION_MODELS` catalogue is reordered (qwen → minicpm-v → glm-ocr …) with speed/quality ranks and blurbs rewritten from the measured numbers.
+
+### Fixed
+
+- **Benchmark scored glm-ocr's names as 0% — a scorer bug, not a model failure.** glm-ocr (OCR-specialised) populates `firstName`/`lastName` and usually leaves `fullName` empty; the benchmark's Name column only read `fullName`. The real app already derives `fullName` from first+last (`_contact_to_api`), so those names show correctly in-app — the scorer just didn't replicate it. Name matching now checks both `fullName` and `firstName+lastName`, with token-subset logic so "Gilberto Costa" matches a fuller "Gilberto Moura Costa" and a first-name-only truth still matches. Re-running the benchmark will now show glm-ocr's true (much higher) name accuracy.
+
+### Notes
+
+- 5 new name-matching tests + config-default updates. 333 total pass. This does not change how the app extracts or stores names — only how the benchmark scores them.
+
+---
+
 ## [2.1.30] — 2026-07-08
 
 ### Fixed

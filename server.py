@@ -1514,7 +1514,7 @@ async def preview(
 @app.post("/api/scan")
 async def scan(
     files: List[UploadFile] = File(...),
-    model: str = Form("glm-ocr"),
+    model: str = Form("qwen2.5vl:7b"),
     mode: str = Form("auto"),
     rows: int = Form(4),
     cols: int = Form(2),
@@ -2240,7 +2240,7 @@ async def relaunch_history(run_id: str, request: Request):
 
     # Resolve effective settings: body override -> archived setting -> default
     saved_mode = _MODE_REVERSE_MAP.get(settings.get("detection_mode", ""), "auto")
-    model = body.get("model") or settings.get("vision_model") or "glm-ocr"
+    model = body.get("model") or settings.get("vision_model") or "qwen2.5vl:7b"
     mode = body.get("mode") or saved_mode
     rows = int(body.get("rows", 4))
     cols = int(body.get("cols", 2))

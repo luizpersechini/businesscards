@@ -13,7 +13,7 @@ class TestAppConfig:
     def test_default_config(self):
         """Test default configuration values."""
         config = AppConfig()
-        assert config.vision_model == "glm-ocr"
+        assert config.vision_model == "qwen2.5vl:7b"
         assert config.vision_timeout == 300
         assert config.min_card_percent == 5
         assert config.max_card_percent == 40
@@ -24,7 +24,7 @@ class TestAppConfig:
     def test_from_env_with_defaults(self):
         """Test loading config from environment with defaults."""
         config = AppConfig.from_env()
-        assert config.vision_model == "glm-ocr"  # Default value
+        assert config.vision_model == "qwen2.5vl:7b"  # Default value
         assert config.vision_timeout == 300
     
     def test_from_env_with_overrides(self, monkeypatch):

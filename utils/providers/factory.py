@@ -44,7 +44,7 @@ class ProviderFactory:
     DEFAULT_CONFIGS = [
         ProviderConfig(
             provider_type=ProviderType.OLLAMA,
-            model_name="glm-ocr",
+            model_name="qwen2.5vl:7b",
             api_url="http://localhost:11434",
             timeout=300,  # 5 min — first load can be slow on CPU/low VRAM
             priority=0,

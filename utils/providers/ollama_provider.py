@@ -64,8 +64,13 @@ class OllamaVisionProvider(VisionProvider):
     """Ollama-based vision provider for local model inference."""
 
     DEFAULT_VISION_MODELS = [
-        "glm-ocr",  # OCR-specialised, default (#1 OmniDocBench)
-        "qwen2.5vl",  # Strong general VLM fallback (96.4% DocVQA, 88.8% OCRBench)
+        # Ordered by measured accuracy on the user's own locked-contact
+        # benchmark (see /api/benchmark). qwen2.5vl wins overall; glm-ocr is
+        # fast but scores 0% on names (OCR-only, no field reasoning), so it's
+        # demoted from the historical default.
+        "qwen2.5vl",  # best overall (83.6% field accuracy on our cards)
+        "minicpm-v",  # balanced; best on names, ~2x faster than qwen
+        "glm-ocr",  # fastest, but weak on names — OCR-specialised
         "llama3.2-vision",
         "llava:13b",
         "llava",
@@ -77,7 +82,7 @@ class OllamaVisionProvider(VisionProvider):
         if config is None:
             config = ProviderConfig(
                 provider_type=ProviderType.OLLAMA,
-                model_name="glm-ocr",
+                model_name="qwen2.5vl:7b",
                 api_url="http://localhost:11434",
                 timeout=120,
                 priority=0,  # Highest priority (local first)

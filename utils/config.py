@@ -15,7 +15,7 @@ class AppConfig:
     Load from environment: AppConfig.from_env()
     """
     # Vision model configuration
-    vision_model: str = "glm-ocr"
+    vision_model: str = "qwen2.5vl:7b"
     vision_timeout: int = 300  # 5 minutes - first load can be slow
     
     # Card detection configuration
@@ -39,7 +39,7 @@ class AppConfig:
     # Ollama configuration
     ollama_url: str = "http://localhost:11434"
     ollama_preload_enabled: bool = True
-    ollama_preload_model: str = "glm-ocr"
+    ollama_preload_model: str = "qwen2.5vl:7b"
 
     # API endpoints for cloud providers
     vllm_url: str = "http://localhost:8000"
@@ -58,7 +58,7 @@ class AppConfig:
         Falls back to defaults if not set.
         """
         return cls(
-            vision_model=os.getenv("VISION_MODEL", "glm-ocr"),
+            vision_model=os.getenv("VISION_MODEL", "qwen2.5vl:7b"),
             vision_timeout=int(os.getenv("VISION_TIMEOUT", "300")),
             detection_mode=os.getenv("DETECTION_MODE", "Automatic"),
             min_card_percent=int(os.getenv("MIN_CARD_PERCENT", "5")),
@@ -72,7 +72,7 @@ class AppConfig:
             qr_preprocessing_variants=int(os.getenv("QR_PREPROCESSING_VARIANTS", "5")),
             ollama_url=os.getenv("OLLAMA_URL", "http://localhost:11434"),
             ollama_preload_enabled=os.getenv("OLLAMA_PRELOAD", "true").lower() == "true",
-            ollama_preload_model=os.getenv("OLLAMA_PRELOAD_MODEL", "glm-ocr"),
+            ollama_preload_model=os.getenv("OLLAMA_PRELOAD_MODEL", "qwen2.5vl:7b"),
             vllm_url=os.getenv("VLLM_URL", "http://localhost:8000"),
             history_base_dir=os.getenv("HISTORY_BASE_DIR", "temp"),
             log_level=os.getenv("LOG_LEVEL", "INFO"),

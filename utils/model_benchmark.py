@@ -70,10 +70,42 @@ def _phones_match(a: str, b: str) -> bool:
     return da.endswith(db) or db.endswith(da)
 
 
+def _name_variants(d: Dict) -> List[str]:
+    """All the ways a contact's name may be spread across fields. Mirrors the
+    app's own fullName derivation (`_contact_to_api`): OCR-style models like
+    glm-ocr populate firstName/lastName and leave fullName empty, but the app
+    still shows the name — so the benchmark must score it the same way."""
+    out = []
+    fn = (d.get("fullName") or "").strip()
+    if fn:
+        out.append(fn)
+    fl = f"{(d.get('firstName') or '').strip()} {(d.get('lastName') or '').strip()}".strip()
+    if fl:
+        out.append(fl)
+    return out
+
+
+def _name_matches(truth_value: str, extracted: Dict) -> bool:
+    """Name match against any extracted name variant, using token-subset
+    logic so 'Gilberto Costa' matches a fuller 'Gilberto Moura Costa' and a
+    shorter first-name-only truth still matches 'Cândida Lucena'."""
+    t = set(_norm_text(truth_value).split())
+    if not t:
+        return False
+    for cand in _name_variants(extracted):
+        c = set(_norm_text(cand).split())
+        if c and (t == c or t <= c or c <= t):
+            return True
+    return False
+
+
 def field_matches(field: str, truth_value: str, extracted: Dict) -> bool:
     """Does the extracted contact match ground truth for one field?"""
     if not truth_value:
         return False
+    if field == "fullName":
+        # Names may live in fullName OR firstName+lastName — check both.
+        return _name_matches(truth_value, extracted)
     if field in ("phone", "mobile"):
         # Pool: a truth phone found in EITHER extracted slot counts.
         pool = [extracted.get("phone") or "", extracted.get("mobile") or ""]

@@ -171,3 +171,38 @@ class TestModelRouting:
         img = np.zeros((10, 10, 3), dtype=np.uint8)
         factory.extract_with_fallback(img, None, model="qwen2.5vl:7b")
         assert seen["model_at_call"] == "qwen2.5vl:7b"
+
+
+class TestNameMatching:
+    """Names may land in fullName OR firstName+lastName (OCR models like
+    glm-ocr use the latter). The benchmark must credit both, mirroring the
+    app's own fullName derivation — otherwise glm-ocr scores a false 0%."""
+
+    def test_name_in_first_last_when_fullname_empty(self):
+        assert field_matches(
+            "fullName", "Fabiola Souza",
+            {"fullName": None, "firstName": "Fabiola", "lastName": "Souza"},
+        )
+
+    def test_truth_subset_of_fuller_extracted_name(self):
+        # 'Gilberto Costa' (truth) vs 'Gilberto Moura Costa' (full legal name)
+        assert field_matches(
+            "fullName", "Gilberto Costa",
+            {"firstName": "Gilberto", "lastName": "Moura Costa"},
+        )
+
+    def test_short_truth_matches_first_last_even_if_fullname_is_title(self):
+        # glm-ocr scramble: fullName holds a title, name is in first/last.
+        assert field_matches(
+            "fullName", "Candida",
+            {"fullName": "Commercial Manager", "firstName": "Cândida", "lastName": "Lucena"},
+        )
+
+    def test_accent_folded_name(self):
+        assert field_matches("fullName", "Joao Gusmao", {"fullName": "João Gusmão"})
+
+    def test_wrong_name_still_fails(self):
+        assert not field_matches(
+            "fullName", "Victor Becattini",
+            {"firstName": "Marcelo", "lastName": "Dias"},
+        )

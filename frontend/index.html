@@ -1387,37 +1387,37 @@
       // Scanner Tab Component
 
       // ─── Vision model catalogue ───────────────────────────────────────────────────
-      // Ordered by best speed-quality balance for business-card OCR on an
-      // M-series Mac. `speed` and `quality` are 1-5 ranks (higher = better).
-      // The picker shows badges in the form `S{speed}/Q{quality}` next to
-      // each pill, plus a one-line blurb under the selected one.
+      // Ordered by MEASURED field accuracy on the user's own locked-contact
+      // benchmark (Contacts tab → Benchmark), not vendor claims. `speed` and
+      // `quality` are 1-5 ranks. The picker shows `S{speed}/Q{quality}` badges
+      // and a one-line blurb under the selected model.
       const VISION_MODELS = [
+        {
+          id: "qwen2.5vl:7b",
+          shortLabel: "Qwen2.5-VL 7B",
+          speed: 2,
+          quality: 5,
+          blurb:
+            "Default. Best overall on our cards (~84% field accuracy) — perfect email + website, strong names/titles. Slowest (~22 s/card), 5.7 GB.",
+          tooltip: "Speed 2/5 · Quality 5/5 — best overall (default)",
+        },
+        {
+          id: "minicpm-v",
+          shortLabel: "MiniCPM-V 8B",
+          speed: 3,
+          quality: 4,
+          blurb:
+            "Best speed/quality balance (~73%). Best on names (100%), ~2× faster than Qwen (~15 s/card). Weaker on mobile numbers. 5.2 GB.",
+          tooltip: "Speed 3/5 · Quality 4/5 — balanced, best names",
+        },
         {
           id: "glm-ocr",
           shortLabel: "GLM-OCR 0.9B",
           speed: 5,
-          quality: 4,
+          quality: 2,
           blurb:
-            "OCR-specialised, ~2 GB. Best for clean cards with mostly Latin text — fastest in the lineup.",
-          tooltip: "Speed 5/5 · Quality 4/5 — fastest, OCR-tuned",
-        },
-        {
-          id: "qwen2.5vl:7b",
-          shortLabel: "Qwen2.5-VL 7B",
-          speed: 3,
-          quality: 5,
-          blurb:
-            "General multilingual vision, 5.7 GB. Strongest on complex layouts, multi-language cards, and mixed graphics + text.",
-          tooltip: "Speed 3/5 · Quality 5/5 — best general vision",
-        },
-        {
-          id: "minicpm-v",
-          shortLabel: "MiniCPM-V 4.6 8B",
-          speed: 3,
-          quality: 4,
-          blurb:
-            "Balanced multilingual VLM, 5.2 GB. Solid alternative to Qwen2.5-VL — often better on Asian text.",
-          tooltip: "Speed 3/5 · Quality 4/5 — balanced multilingual",
+            "Fastest by far (~5 s/card) but OCR-only: scored 0% on names in benchmark. Good for phone/email/website, not for full contacts. ~2 GB.",
+          tooltip: "Speed 5/5 · Quality 2/5 — fast but weak on names",
         },
         {
           id: "moondream",
@@ -1425,7 +1425,7 @@
           speed: 5,
           quality: 3,
           blurb:
-            "Tiny vision model, 1.7 GB. Use when you need fast on low-resource conditions and the card is simple.",
+            "Tiny vision model, 1.7 GB. Fast + low-resource; use only for simple cards. Not benchmarked here.",
           tooltip: "Speed 5/5 · Quality 3/5 — tiny + fast",
         },
         {
@@ -1434,7 +1434,7 @@
           speed: 3,
           quality: 3,
           blurb:
-            "Older general VLM, 4.5 GB. Reliable fallback but newer models usually beat it. Keep as a sanity check.",
+            "Older general VLM, 4.5 GB. Reliable fallback but newer models beat it. Keep as a sanity check.",
           tooltip: "Speed 3/5 · Quality 3/5 — fallback",
         },
         {
@@ -4140,7 +4140,7 @@
       function ScannerTab({ tweaks, densityPad, onEditCard }) {
         const [files, setFiles] = useState([]);
         const [config, setConfig] = useState({
-          model: "glm-ocr",
+          model: "qwen2.5vl:7b",
           mode: "auto",
           rows: 4,
           cols: 2,
