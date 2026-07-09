@@ -123,7 +123,17 @@ def field_matches(field: str, truth_value: str, extracted: Dict) -> bool:
     nt, nv = _norm_text(truth_value), _norm_text(value)
     if not nt or not nv:
         return False
-    return nt == nv or f" {nt} " in f" {nv} " or f" {nv} " in f" {nt} "
+    if nt == nv or f" {nt} " in f" {nv} " or f" {nv} " in f" {nt} ":
+        return True
+    # Space-insensitive prefix match — catches the same name written with
+    # different word breaks: "Inter Maritima" vs "Intermarítima Portos e
+    # Logística S.A." Guarded to >=4 chars on the shorter side so short
+    # acronyms ("MME", "BNB") correctly stay misses (they're genuinely a
+    # different string from the model's expanded form, not a spacing quirk).
+    st, sv = nt.replace(" ", ""), nv.replace(" ", "")
+    if min(len(st), len(sv)) >= 4 and (st.startswith(sv) or sv.startswith(st)):
+        return True
+    return False
 
 
 def score_card(truth: Dict, extracted: Dict) -> Dict[str, bool]:

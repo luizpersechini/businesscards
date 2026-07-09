@@ -2,6 +2,18 @@
 
 All notable changes to the Business Card Scanner project will be documented in this file.
 
+## [2.1.32] — 2026-07-08
+
+### Fixed
+
+- **Benchmark under-scored Company** (~67% for the best model). Investigating the qwen misses showed most weren't extraction errors: the verified truth used a short form while the model read the full legal name — `"Inter Maritima"` vs `"Intermarítima Portos e Logística S.A."` (same name, different word breaks + legal suffix). Company/title matching now also does a **space-insensitive prefix match**, guarded to ≥4 chars on the shorter side. This credits the spacing case while correctly leaving genuine differences as misses: short acronyms (`"MME"` ↔ Ministério de Minas e Energia, `"BNB"` ↔ Banco do Nordeste), different divisions (`"Citibank"` ↔ "Citi Treasury and Trade Solutions"), and 1-char OCR errors (`"Maceló"` → "Maceió") all still count against the model — those reflect a real gap between the model's output and your verified data.
+
+### Notes
+
+- 5 new company-matching tests. 338 total pass. As with the name fix, this only changes benchmark _scoring_ — extraction and storage are untouched. Company extraction was already strong; the low number was mostly your own abbreviations vs the models' full legal names.
+
+---
+
 ## [2.1.31] — 2026-07-08
 
 ### Changed

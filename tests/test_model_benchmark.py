@@ -206,3 +206,38 @@ class TestNameMatching:
             "fullName", "Victor Becattini",
             {"firstName": "Marcelo", "lastName": "Dias"},
         )
+
+
+class TestCompanySpacing:
+    """Company names written with different word breaks are the same name;
+    short acronyms are not. (Investigated from a real benchmark run.)"""
+
+    def test_spaced_vs_concatenated_with_legal_suffix(self):
+        # 'Inter Maritima' (user's short form) == the model's full legal name.
+        assert field_matches(
+            "company", "Inter Maritima",
+            {"company": "Intermarítima Portos e Logística S.A."},
+        )
+
+    def test_acronym_stays_a_miss(self):
+        # 'MME' / 'BNB' are genuinely different strings from the expansion —
+        # the benchmark should NOT credit them (user verified the short form).
+        assert not field_matches("company", "MME", {"company": "Ministério de Minas e Energia"})
+        assert not field_matches("company", "BNB", {"company": "Banco do Nordeste"})
+
+    def test_one_char_ocr_error_stays_a_miss(self):
+        # 'Maceló' misread as 'Maceió' is a real error, not a spacing quirk.
+        assert not field_matches(
+            "company", "Maceló Logística & Serviços Portuários",
+            {"company": "Maceió Logística & Serviços Portuários"},
+        )
+
+    def test_different_division_stays_a_miss(self):
+        # 'Citibank' vs 'Citi Treasury and Trade Solutions' — not a prefix.
+        assert not field_matches(
+            "company", "Citibank", {"company": "Citi Treasury and Trade Solutions"}
+        )
+
+    def test_short_truth_not_false_matched(self):
+        # 'IT' must not match 'digital' via a substring fluke.
+        assert not field_matches("company", "IT", {"company": "digital"})
