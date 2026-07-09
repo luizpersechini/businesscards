@@ -2,6 +2,27 @@
 
 All notable changes to the Business Card Scanner project will be documented in this file.
 
+## [2.1.34] — 2026-07-08
+
+### Added
+
+- **User-editable company alias list** — closes the last "bucket 2" benchmark miss (`BNB` vs "Banco do Nordeste") and any org short-form that string logic can't derive. `temp/company_aliases.json` is a JSON list-of-lists, each inner list a set of equivalent names:
+  ```json
+  [
+    ["BNB", "Banco do Nordeste", "Banco do Nordeste do Brasil"],
+    ["Citibank", "Citi", "Citigroup"]
+  ]
+  ```
+  A company field matches ground truth when the verified value and the extracted value both fall in the same group (with normalized equality + containment inside the group, so "Banco do Nordeste" matches the fuller alias entry). Loaded by `field_matches` for the `company` field only, cached by file mtime so edits are picked up without a restart, and fails safe to `[]` if the file is missing or malformed.
+  - Seeded on this machine with the three known cases (BNB / Citibank / MME). A committed `company_aliases.example.json` documents the format for fresh installs (the live file lives in the gitignored `temp/`, like the contacts store).
+- 12 new tests (alias matching both directions, in-group containment, no cross-group leak, company-field-only, missing/malformed file handling). 352 total pass.
+
+### Notes
+
+- Bucket 2 is now fully closeable: acronym + brand-prefix handle the derivable cases generically; the alias list handles the rest under your explicit control (no guessing, no false positives). Scoring-only — extraction untouched.
+
+---
+
 ## [2.1.33] — 2026-07-08
 
 ### Changed

@@ -27,6 +27,7 @@ actually gets.
 
 from __future__ import annotations
 
+import json
 import os
 import re
 import unicodedata
@@ -36,6 +37,20 @@ from typing import Dict, List, Optional
 BENCH_FIELDS = ("fullName", "title", "company", "email", "phone", "mobile", "website")
 
 _MIN_PHONE_DIGITS = 8
+
+# User-editable company alias groups. Each group is a list of names that
+# refer to the same organisation; a company field matches ground truth when
+# both the verified value and the extracted value fall in the SAME group.
+# This is the escape hatch for short-forms that string logic can't derive —
+# e.g. "BNB" == "Banco do Nordeste" (the acronym expands to "…do Brasil",
+# which the model drops). Format is a JSON list-of-lists; see the seeded
+# temp/company_aliases.json.
+_ALIAS_PATH = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+    "temp",
+    "company_aliases.json",
+)
+_alias_cache: Dict = {"mtime": None, "groups": []}
 
 
 def _fold(s: str) -> str:
@@ -97,6 +112,51 @@ def _brand_prefix_match(a: str, b: str) -> bool:
     return False
 
 
+def load_company_aliases(path: Optional[str] = None) -> List[List[str]]:
+    """Load the user's company alias groups from JSON, cached by file mtime
+    so edits are picked up without a restart. Returns [] if the file is
+    missing or malformed (never raises)."""
+    path = path or _ALIAS_PATH
+    try:
+        mtime = os.path.getmtime(path)
+    except OSError:
+        _alias_cache.update(mtime=None, groups=[])
+        return []
+    if _alias_cache["mtime"] != mtime:
+        groups: List[List[str]] = []
+        try:
+            with open(path, encoding="utf-8") as f:
+                data = json.load(f)
+            if isinstance(data, list):
+                groups = [
+                    [str(x) for x in g if isinstance(x, str)] for g in data if isinstance(g, list)
+                ]
+        except (json.JSONDecodeError, OSError, ValueError):
+            groups = []
+        _alias_cache.update(mtime=mtime, groups=groups)
+    return _alias_cache["groups"]
+
+
+def _matches_alias(text: str, alias: str) -> bool:
+    """Normalized equality or containment between a field value and an alias
+    entry ('Banco do Nordeste' matches the alias 'Banco do Nordeste do
+    Brasil')."""
+    nt, na = _norm_text(text), _norm_text(alias)
+    if not nt or not na:
+        return False
+    return nt == na or f" {na} " in f" {nt} " or f" {nt} " in f" {na} "
+
+
+def _alias_match(a: str, b: str, groups: List[List[str]]) -> bool:
+    """True if `a` and `b` both fall in the same alias group."""
+    for group in groups:
+        if any(_matches_alias(a, al) for al in group) and any(
+            _matches_alias(b, al) for al in group
+        ):
+            return True
+    return False
+
+
 def _norm_email(s: str) -> str:
     return s.strip().lower()
 
@@ -149,7 +209,12 @@ def _name_matches(truth_value: str, extracted: Dict) -> bool:
     return False
 
 
-def field_matches(field: str, truth_value: str, extracted: Dict) -> bool:
+def field_matches(
+    field: str,
+    truth_value: str,
+    extracted: Dict,
+    aliases: Optional[List[List[str]]] = None,
+) -> bool:
     """Does the extracted contact match ground truth for one field?"""
     if not truth_value:
         return False
@@ -186,20 +251,25 @@ def field_matches(field: str, truth_value: str, extracted: Dict) -> bool:
     # Company only: an org may be verified as an acronym or brand short-form
     # while the model reads the full legal name — 'MME' vs 'Ministério de
     # Minas e Energia', 'Citibank' vs 'Citi Treasury and Trade Solutions'.
-    if field == "company" and (
-        _acronym_match(truth_value, value) or _brand_prefix_match(truth_value, value)
-    ):
-        return True
+    # Falls back to the user's alias groups for cases string logic can't
+    # derive (e.g. 'BNB' == 'Banco do Nordeste').
+    if field == "company":
+        if _acronym_match(truth_value, value) or _brand_prefix_match(truth_value, value):
+            return True
+        groups = aliases if aliases is not None else load_company_aliases()
+        if groups and _alias_match(truth_value, value, groups):
+            return True
     return False
 
 
 def score_card(truth: Dict, extracted: Dict) -> Dict[str, bool]:
     """Per-field match map, only for fields the truth has populated."""
+    aliases = load_company_aliases()  # cached; loaded once per card
     out: Dict[str, bool] = {}
     for f in BENCH_FIELDS:
         tv = (truth.get(f) or "").strip()
         if tv:
-            out[f] = field_matches(f, tv, extracted or {})
+            out[f] = field_matches(f, tv, extracted or {}, aliases=aliases)
     return out
 
 

@@ -256,17 +256,82 @@ class TestCompanyAcronymAndBrand:
             "company", "Citibank", {"company": "Citi Markets and Securities Services"}
         )
 
-    def test_acronym_missing_letter_stays_miss(self):
+    def test_acronym_missing_letter_stays_miss_without_alias(self):
         # BNB = Banco do Nordeste *do Brasil*; the model dropped 'do Brasil',
-        # so its output can't yield the third letter — legitimately a miss.
-        assert not field_matches("company", "BNB", {"company": "Banco do Nordeste"})
+        # so STRING LOGIC can't yield the third letter. (An explicit alias
+        # group closes it — see TestCompanyAliases.) aliases=[] isolates the
+        # string-logic behaviour from the on-disk alias file.
+        assert not field_matches("company", "BNB", {"company": "Banco do Nordeste"}, aliases=[])
 
     def test_wrong_acronym_stays_miss(self):
-        assert not field_matches("company", "ABC", {"company": "Apple Inc"})
+        assert not field_matches("company", "ABC", {"company": "Apple Inc"}, aliases=[])
 
     def test_short_first_word_guarded(self):
-        assert not field_matches("company", "San", {"company": "Sandvik Mining"})
+        assert not field_matches("company", "San", {"company": "Sandvik Mining"}, aliases=[])
 
     def test_acronym_only_applies_to_company_not_title(self):
         # A 3-letter title must not fuzzy-match an unrelated expansion.
         assert not field_matches("title", "CEO", {"title": "Chief Executive of Operations Board"})
+
+
+class TestCompanyAliases:
+    """User-editable alias groups close org short-forms that string logic
+    can't derive (e.g. BNB == Banco do Nordeste)."""
+
+    GROUPS = [
+        ["BNB", "Banco do Nordeste", "Banco do Nordeste do Brasil"],
+        ["Petrobras", "Petróleo Brasileiro S.A."],
+    ]
+
+    def test_alias_closes_acronym(self):
+        assert field_matches(
+            "company", "BNB", {"company": "Banco do Nordeste"}, aliases=self.GROUPS
+        )
+
+    def test_alias_reverse_direction(self):
+        assert field_matches(
+            "company", "Banco do Nordeste do Brasil", {"company": "BNB"}, aliases=self.GROUPS
+        )
+
+    def test_alias_containment_within_group(self):
+        # 'Banco do Nordeste' (extracted) matches the fuller alias entry.
+        assert field_matches(
+            "company",
+            "BNB",
+            {"company": "Banco do Nordeste do Brasil S.A."},
+            aliases=self.GROUPS,
+        )
+
+    def test_alias_no_cross_group_leak(self):
+        assert not field_matches(
+            "company", "BNB", {"company": "Petróleo Brasileiro S.A."}, aliases=self.GROUPS
+        )
+
+    def test_alias_unrelated_still_miss(self):
+        assert not field_matches("company", "BNB", {"company": "Bradesco"}, aliases=self.GROUPS)
+
+    def test_aliases_only_for_company(self):
+        # Alias groups must not bleed into other fields.
+        assert not field_matches(
+            "title", "BNB", {"title": "Banco do Nordeste"}, aliases=self.GROUPS
+        )
+
+    def test_load_missing_file_returns_empty(self):
+        from utils.model_benchmark import load_company_aliases
+
+        assert load_company_aliases("/nonexistent/path/aliases.json") == []
+
+    def test_load_malformed_file_returns_empty(self, tmp_path):
+        from utils.model_benchmark import load_company_aliases
+
+        bad = tmp_path / "aliases.json"
+        bad.write_text("{not valid json", encoding="utf-8")
+        assert load_company_aliases(str(bad)) == []
+
+    def test_load_valid_file(self, tmp_path):
+        from utils.model_benchmark import load_company_aliases
+
+        good = tmp_path / "aliases.json"
+        good.write_text('[["A", "Alpha"], ["B", "Beta"]]', encoding="utf-8")
+        groups = load_company_aliases(str(good))
+        assert groups == [["A", "Alpha"], ["B", "Beta"]]
