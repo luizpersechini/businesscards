@@ -20,13 +20,13 @@ cd "/Users/LuizPersechini_1/Projects/Leitor Otimo Cartoes LLM"
 python3.13 -m venv .venv          # or: uv venv --python 3.13 .venv
 .venv/bin/python -m pip install -r requirements.lock   # hash-pinned
 
-# System libs (QR + HEIC + Tesseract)
-brew install zbar libheif tesseract              # macOS
-# or: sudo apt-get install libzbar0 libheif1 tesseract-ocr   # Ubuntu/Debian
+# System libs (HEIC + Tesseract). zbar is NOT needed — QR uses zxing-cpp.
+brew install libheif tesseract                   # macOS
+# or: sudo apt-get install libheif1 tesseract-ocr           # Ubuntu/Debian
 
 # Install Ollama (recommended)
 # Visit: https://ollama.com/download
-# Then: ollama pull glm-ocr
+# Then: ollama pull qwen2.5vl:7b   (default; add glm-ocr for a fast option)
 ```
 
 ## Step 2: Start the Application
@@ -40,11 +40,10 @@ ollama serve
 Terminal 2 (FastAPI server + React frontend):
 
 ```bash
-export DYLD_LIBRARY_PATH="/opt/homebrew/lib:$DYLD_LIBRARY_PATH"   # macOS only — for QR support
-python3 server.py
+.venv/bin/python server.py
 ```
 
-> 💡 **macOS shortcut:** double-click `BusinessCardScanner.app` from Finder (or drag it to your Dock). It sets `DYLD_LIBRARY_PATH`, starts the server in the background, and opens the browser. Use `StopBusinessCardScanner.app` to clean shutdown.
+> 💡 **macOS shortcut:** double-click `BusinessCardScanner.app` from Finder (or drag it to your Dock). It starts the server in the background and opens the browser. Use `StopBusinessCardScanner.app` for a clean shutdown.
 
 ## Step 3: Use the App
 
