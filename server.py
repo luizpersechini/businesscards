@@ -1735,6 +1735,32 @@ async def list_contacts():
     return [_contact_to_api(c) for c in contacts]
 
 
+@app.get("/api/contacts/duplicates")
+async def list_duplicate_contacts():
+    """Groups of suspected-duplicate contacts (conservative detection).
+    Each group: {reason, contacts: [api-shaped, newest first]}."""
+    groups = _contacts.find_duplicates()
+    return [
+        {"reason": g["reason"], "contacts": [_contact_to_api(c) for c in g["contacts"]]}
+        for g in groups
+    ]
+
+
+@app.post("/api/contacts/merge")
+async def merge_duplicate_contacts(payload: dict):
+    """Merge source contacts into a target. Body:
+    {"targetId": "...", "sourceIds": ["...", ...]}. Non-destructive on the
+    target; sources are deleted after their fields are folded in."""
+    target_id = (payload or {}).get("targetId")
+    source_ids = (payload or {}).get("sourceIds") or []
+    if not target_id or not isinstance(source_ids, list) or not source_ids:
+        raise HTTPException(status_code=400, detail="targetId and sourceIds required")
+    merged = _contacts.merge_contacts(target_id, source_ids)
+    if not merged:
+        raise HTTPException(status_code=404, detail="Target contact not found")
+    return {"ok": True, "contact": _contact_to_api(merged)}
+
+
 @app.delete("/api/contacts/{contact_id}")
 async def delete_contact(contact_id: str):
     removed = _contacts.remove_contact(contact_id)

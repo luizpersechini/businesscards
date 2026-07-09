@@ -466,3 +466,110 @@ class TestPersistenceSafety(unittest.TestCase):
         # No duplicate ids from racing uuid generation / list appends.
         ids = [c["id"] for c in data]
         self.assertEqual(len(ids), len(set(ids)))
+
+
+class TestDuplicateDetection(unittest.TestCase):
+    """Conservative near-duplicate detection + merge."""
+
+    def setUp(self) -> None:
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.repo = ContactsRepository(repo_path=str(Path(self.temp_dir.name) / "contacts.json"))
+
+    def tearDown(self) -> None:
+        self.temp_dir.cleanup()
+
+    def _add(self, **cd):
+        return self.repo.add_contact(cd)["id"]
+
+    def _inject(self, cid, **cd):
+        """Append a raw contact, bypassing add_contact's same-email merge —
+        used to simulate legacy/hand-edited data that already contains an
+        email collision."""
+        self.repo._contacts.append(
+            {
+                "id": cid,
+                "contact_data": cd,
+                "locked": False,
+                "added_at": f"2020-01-01T00:00:{len(self.repo._contacts):02d}",
+                "updated_at": "2020-01-01T00:00:00",
+            }
+        )
+
+    def test_same_email_flagged(self):
+        # add_contact merges same-email contacts, so this only occurs for
+        # legacy/edited data — inject it directly.
+        self._inject("id1", fullName="Ann Lee", email="a@x.com")
+        self._inject("id2", fullName="Ann Lee", email="A@X.COM", company="Acme")
+        groups = self.repo.find_duplicates()
+        self.assertEqual(len(groups), 1)
+        self.assertEqual(groups[0]["reason"], "same email")
+
+    def test_name_plus_company_flagged_different_email(self):
+        # The real André Marra case: accent + different emails, same company.
+        self._add(fullName="Andre Marra", email="marra@galapagos.com", company="Galapagos Capital")
+        self._add(
+            fullName="André Marra", email="andre.marra@galapagos.com", company="Galapagos Capital"
+        )
+        groups = self.repo.find_duplicates()
+        self.assertEqual(len(groups), 1)
+        self.assertEqual(groups[0]["reason"], "same name + company")
+
+    def test_name_plus_phone_flagged(self):
+        self._add(fullName="Bob Smith", phone="+55 11 99999-1234")
+        self._add(fullName="Bob Smith", mobile="11 99999 1234", company="Other")
+        groups = self.repo.find_duplicates()
+        self.assertEqual(len(groups), 1)
+        self.assertIn(groups[0]["reason"], ("same name + phone", "same name + company"))
+
+    def test_same_name_no_corroboration_not_flagged(self):
+        # Common name, nothing else in common — conservative: NOT a dup.
+        self._add(fullName="John Silva", company="Alpha", email="j@alpha.com")
+        self._add(fullName="John Silva", company="Beta", email="john@beta.com")
+        self.assertEqual(self.repo.find_duplicates(), [])
+
+    def test_single_first_name_not_enough(self):
+        # Only one shared token (a first name) must not flag.
+        self._add(fullName="Maria Santos", company="Acme", phone="111-22233")
+        self._add(fullName="Maria Oliveira", company="Acme")
+        self.assertEqual(self.repo.find_duplicates(), [])
+
+    def test_transitive_grouping(self):
+        # A~B (name+company) and B~C (name+phone) collapse into one group of 3.
+        # Distinct emails so add_contact doesn't pre-merge any pair.
+        self._add(fullName="Ann Lee", email="a1@x.com", company="Acme", phone="111-22233")
+        self._add(fullName="Ann Lee", email="a2@x.com", company="Acme")
+        self._add(fullName="Ann Lee", email="a3@x.com", company="Other", phone="111 22233")
+        groups = self.repo.find_duplicates()
+        self.assertEqual(len(groups), 1)
+        self.assertEqual(len(groups[0]["contacts"]), 3)
+
+    # Distinct emails so add_contact doesn't pre-merge — these exercise
+    # merge_contacts directly.
+    def test_merge_fills_empty_fields_and_deletes_sources(self):
+        tid = self._add(fullName="Ann Lee", email="a@x.com")
+        sid = self._add(fullName="Ann Lee", email="b@x.com", company="Acme", phone="123-45678")
+        merged = self.repo.merge_contacts(tid, [sid])
+        self.assertEqual(merged["id"], tid)
+        self.assertEqual(merged["contact_data"]["company"], "Acme")  # filled
+        self.assertEqual(merged["contact_data"]["phone"], "123-45678")
+        self.assertEqual(self.repo.count(), 1)  # source deleted
+
+    def test_merge_never_overwrites_target_values(self):
+        tid = self._add(fullName="Ann Lee", email="a@x.com", company="RealCo")
+        sid = self._add(fullName="Ann Lee", email="b@x.com", company="WrongCo")
+        merged = self.repo.merge_contacts(tid, [sid])
+        self.assertEqual(merged["contact_data"]["company"], "RealCo")
+
+    def test_merge_respects_locked_protected_fields(self):
+        tid = self._add(fullName="Ann Lee", email="a@x.com")
+        self.repo.set_locked(tid, True)
+        sid = self._add(fullName="Ann Lee", email="b@x.com", company="Acme")
+        # A locked target with an existing name/email must not have them
+        # changed, but empty non-protected fields (company) still fill.
+        merged = self.repo.merge_contacts(tid, [sid])
+        self.assertEqual(merged["contact_data"]["fullName"], "Ann Lee")
+        self.assertEqual(merged["contact_data"]["email"], "a@x.com")
+        self.assertEqual(merged["contact_data"]["company"], "Acme")
+
+    def test_merge_missing_target_returns_none(self):
+        self.assertIsNone(self.repo.merge_contacts("nope", ["also-nope"]))

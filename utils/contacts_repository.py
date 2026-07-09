@@ -365,12 +365,171 @@ class ContactsRepository:
         """Return all contacts (newest first)."""
         return sorted(self._contacts, key=lambda c: c.get("added_at", ""), reverse=True)
 
+    # ── Duplicate detection ─────────────────────────────────────────────────
+
+    @staticmethod
+    def _dup_tokens(text: str) -> set:
+        """Accent-folded lowercase word tokens (len >= 2) for fuzzy compare."""
+        if not text:
+            return set()
+        import re
+        import unicodedata
+
+        folded = unicodedata.normalize("NFKD", str(text)).encode("ascii", "ignore").decode().lower()
+        return {t for t in re.findall(r"[a-z0-9]+", folded) if len(t) >= 2}
+
+    @staticmethod
+    def _dup_phone_key(cd: Dict) -> set:
+        """Digit-suffix keys (last 8 digits) of a contact's phone + mobile."""
+        import re
+
+        keys = set()
+        for f in ("phone", "mobile"):
+            digits = re.sub(r"\D", "", cd.get(f) or "")
+            if len(digits) >= 8:
+                keys.add(digits[-8:])
+        return keys
+
+    def _is_duplicate_pair(self, a: Dict, b: Dict) -> Optional[str]:
+        """Conservative duplicate test between two contact entries.
+
+        Returns a short reason string when the pair is a likely duplicate,
+        else None. Evidence required (any ONE):
+          - same email (case-insensitive), OR
+          - matching name AND (matching company OR a shared phone number).
+        "Matching name" = the smaller name's tokens are a subset of the
+        larger's (so "Gilberto Costa" ~ "Gilberto Moura Costa"), needing at
+        least two shared tokens to avoid single-first-name collisions.
+        """
+        ca = a.get("contact_data") or {}
+        cb = b.get("contact_data") or {}
+
+        ea = (ca.get("email") or "").strip().lower()
+        eb = (cb.get("email") or "").strip().lower()
+        if ea and eb and ea == eb:
+            return "same email"
+
+        # Name similarity
+        na = self._dup_tokens(
+            ca.get("fullName") or f"{ca.get('firstName', '')} {ca.get('lastName', '')}"
+        )
+        nb = self._dup_tokens(
+            cb.get("fullName") or f"{cb.get('firstName', '')} {cb.get('lastName', '')}"
+        )
+        shared = na & nb
+        name_match = len(shared) >= 2 and (na <= nb or nb <= na)
+        if not name_match:
+            return None
+
+        # Corroborating evidence
+        comp_a = self._dup_tokens(ca.get("company"))
+        comp_b = self._dup_tokens(cb.get("company"))
+        if comp_a and comp_b and (comp_a <= comp_b or comp_b <= comp_a):
+            return "same name + company"
+
+        if self._dup_phone_key(ca) & self._dup_phone_key(cb):
+            return "same name + phone"
+
+        return None
+
+    def find_duplicates(self) -> List[Dict]:
+        """Return groups of suspected-duplicate contacts (conservative).
+
+        Uses union-find so a chain A~B~C collapses into one group. Each group
+        is {"reason": str, "contacts": [api-shaped dicts]} with 2+ members.
+        Newest-first within a group so the older record is the merge target.
+        """
+        contacts = list(self._contacts)
+        n = len(contacts)
+        parent = list(range(n))
+
+        def find(i):
+            while parent[i] != i:
+                parent[i] = parent[parent[i]]
+                i = parent[i]
+            return i
+
+        reasons: Dict[int, str] = {}
+        for i in range(n):
+            for j in range(i + 1, n):
+                reason = self._is_duplicate_pair(contacts[i], contacts[j])
+                if reason:
+                    ri, rj = find(i), find(j)
+                    if ri != rj:
+                        parent[ri] = rj
+                    reasons[find(i)] = reason
+
+        groups: Dict[int, List[int]] = {}
+        for i in range(n):
+            groups.setdefault(find(i), []).append(i)
+
+        out = []
+        for root, idxs in groups.items():
+            if len(idxs) < 2:
+                continue
+            members = sorted(
+                (contacts[i] for i in idxs),
+                key=lambda c: c.get("added_at", ""),
+                reverse=True,
+            )
+            out.append({"reason": reasons.get(root, "duplicate"), "contacts": members})
+        return out
+
     def fingerprint(self) -> str:
         """Cheap hash of current state — changes whenever contacts change."""
         return f"{len(self._contacts)}:{sum(hash(c.get('id', '')) for c in self._contacts)}"
 
     def count(self) -> int:
         return len(self._contacts)
+
+    @_synchronized
+    def merge_contacts(self, target_id: str, source_ids: List[str]) -> Optional[Dict]:
+        """Merge `source_ids` into `target_id`, then delete the sources.
+
+        Non-destructive on the target: only fields the target is missing get
+        filled from the sources (first source that has each field wins).
+        Respects locked-field protection — a locked target's name/email are
+        never overwritten. Regenerates the VCF. Returns the merged target, or
+        None if the target doesn't exist.
+        """
+        target = next((c for c in self._contacts if c.get("id") == target_id), None)
+        if target is None:
+            return None
+        src_ids = [s for s in source_ids if s and s != target_id]
+        sources = [c for c in self._contacts if c.get("id") in set(src_ids)]
+        if not sources:
+            return target
+
+        tcd = target.setdefault("contact_data", {})
+        locked = bool(target.get("locked"))
+        for src in sources:
+            scd = src.get("contact_data") or {}
+            for k, v in scd.items():
+                if not v:
+                    continue
+                if self._norm_field(tcd.get(k)):
+                    continue  # target already has a value — keep it
+                if locked and k in self._LOCKED_PROTECTED_FIELDS:
+                    continue  # never fill a locked contact's protected fields
+                tcd[k] = v
+            # Inherit a card image / source file if the target lacks one.
+            if not target.get("card_id") and src.get("card_id"):
+                target["card_id"] = src["card_id"]
+            if not target.get("source_file") and src.get("source_file"):
+                target["source_file"] = src["source_file"]
+
+        try:
+            from utils.vcf_generator import VCFGenerator
+
+            target["vcf_content"] = VCFGenerator().generate_vcf_string(tcd)
+        except Exception:
+            pass
+        target["updated_at"] = datetime.now().isoformat()
+
+        drop = set(src_ids)
+        self._contacts = [c for c in self._contacts if c.get("id") not in drop]
+        self._save()
+        return target
 
     # ── Grouping ───────────────────────────────────────────────────────────
 

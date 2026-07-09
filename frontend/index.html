@@ -6278,6 +6278,295 @@
         );
       }
 
+      // ─── Duplicate Contacts Modal ─────────────────────────────────────────────────
+      // Conservative near-duplicate detection (server-side). Exact-email dupes
+      // already merge on save; this catches the rest — same person with a
+      // different/typo'd email — and lets the user pick a target + merge, or
+      // dismiss each group. Nothing is merged without a click.
+      function DuplicatesModal({ onClose, onMerged }) {
+        const [groups, setGroups] = useState(null); // null = loading
+        const [target, setTarget] = useState({}); // groupIdx -> chosen target contact id
+        const [busy, setBusy] = useState(null); // groupIdx being merged
+        const [dismissed, setDismissed] = useState(new Set());
+        const [error, setError] = useState(null);
+
+        useEffect(() => {
+          window
+            .apiGet("/api/contacts/duplicates")
+            .then((data) => {
+              const g = Array.isArray(data) ? data : [];
+              setGroups(g);
+              // Default target = the oldest (last) member of each group.
+              const t = {};
+              g.forEach((grp, i) => {
+                const list = grp.contacts || [];
+                if (list.length) t[i] = list[list.length - 1].id;
+              });
+              setTarget(t);
+            })
+            .catch((e) => {
+              setGroups([]);
+              setError(e.message);
+            });
+        }, []);
+
+        const contactName = (c) => {
+          const cd = c.contact || {};
+          return cd.fullName || cd.email || "(unnamed)";
+        };
+
+        const handleMerge = async (grp, gi) => {
+          const list = grp.contacts || [];
+          const targetId = target[gi] || (list[list.length - 1] || {}).id;
+          const sourceIds = list
+            .map((c) => c.id)
+            .filter((id) => id !== targetId);
+          if (!targetId || sourceIds.length === 0) return;
+          setBusy(gi);
+          setError(null);
+          try {
+            const r = await fetch("/api/contacts/merge", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ targetId, sourceIds }),
+            });
+            if (!r.ok) {
+              const d = await r.text().catch(() => "");
+              throw new Error("HTTP " + r.status + ": " + d.slice(0, 160));
+            }
+            setDismissed((prev) => new Set(prev).add(gi));
+            onMerged && onMerged();
+          } catch (e) {
+            setError(e.message);
+          } finally {
+            setBusy(null);
+          }
+        };
+
+        const visible = (groups || []).filter((_, i) => !dismissed.has(i));
+
+        return (
+          <div
+            onClick={onClose}
+            style={{
+              position: "fixed",
+              inset: 0,
+              backgroundColor: "rgba(0,0,0,0.5)",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              zIndex: 10000,
+              backdropFilter: "blur(4px)",
+            }}
+          >
+            <div
+              onClick={(e) => e.stopPropagation()}
+              style={{
+                backgroundColor: "var(--surface)",
+                borderRadius: "var(--radius-lg)",
+                width: "92%",
+                maxWidth: 680,
+                maxHeight: "90vh",
+                overflow: "auto",
+                boxShadow: "var(--shadow-lg)",
+                padding: "20px 24px",
+              }}
+            >
+              <div
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  marginBottom: 6,
+                }}
+              >
+                <div style={{ fontSize: 16, fontWeight: 700 }}>
+                  Duplicate contacts
+                </div>
+                <div style={{ flex: 1 }} />
+                <button
+                  onClick={onClose}
+                  style={{
+                    border: "none",
+                    background: "none",
+                    fontSize: 20,
+                    cursor: "pointer",
+                    color: "var(--text-tertiary)",
+                  }}
+                >
+                  ×
+                </button>
+              </div>
+              <div
+                style={{
+                  fontSize: 12,
+                  color: "var(--text-secondary)",
+                  marginBottom: 14,
+                  lineHeight: 1.5,
+                }}
+              >
+                Suspected duplicates found by name + company/phone (contacts
+                with the same email already merge automatically). Pick which
+                record to keep — the others fold into it, filling only its empty
+                fields. Locked name/email are never overwritten. Nothing merges
+                until you click.
+              </div>
+
+              {groups === null && (
+                <div style={{ fontSize: 13, color: "var(--text-tertiary)" }}>
+                  Scanning for duplicates…
+                </div>
+              )}
+              {groups && visible.length === 0 && (
+                <div
+                  style={{
+                    fontSize: 13,
+                    color: "var(--success)",
+                    padding: "8px 0",
+                  }}
+                >
+                  ✓ No duplicates found.
+                </div>
+              )}
+              {error && (
+                <div
+                  style={{
+                    fontSize: 12,
+                    color: "var(--danger)",
+                    marginBottom: 10,
+                  }}
+                >
+                  ✗ {error}
+                </div>
+              )}
+
+              {(groups || []).map((grp, gi) =>
+                dismissed.has(gi) ? null : (
+                  <div
+                    key={gi}
+                    style={{
+                      border: "1px solid var(--border)",
+                      borderRadius: 8,
+                      padding: "10px 12px",
+                      marginBottom: 12,
+                    }}
+                  >
+                    <div
+                      style={{
+                        fontSize: 10,
+                        fontWeight: 700,
+                        textTransform: "uppercase",
+                        letterSpacing: "0.06em",
+                        color: "var(--warning)",
+                        marginBottom: 8,
+                      }}
+                    >
+                      {grp.reason} · {(grp.contacts || []).length} records
+                    </div>
+                    {(grp.contacts || []).map((c) => {
+                      const cd = c.contact || {};
+                      const isTarget = target[gi] === c.id;
+                      return (
+                        <label
+                          key={c.id}
+                          style={{
+                            display: "flex",
+                            alignItems: "flex-start",
+                            gap: 10,
+                            padding: "6px 8px",
+                            borderRadius: 6,
+                            background: isTarget
+                              ? "var(--accent-soft)"
+                              : "transparent",
+                            cursor: "pointer",
+                            marginBottom: 2,
+                          }}
+                        >
+                          <input
+                            type="radio"
+                            name={`dup-${gi}`}
+                            checked={isTarget}
+                            onChange={() =>
+                              setTarget((prev) => ({ ...prev, [gi]: c.id }))
+                            }
+                            style={{ marginTop: 3 }}
+                          />
+                          <div style={{ flex: 1, minWidth: 0, fontSize: 12 }}>
+                            <div style={{ fontWeight: 600 }}>
+                              {contactName(c)}
+                              {c.locked && (
+                                <span
+                                  style={{
+                                    marginLeft: 6,
+                                    fontSize: 10,
+                                    color: "var(--accent)",
+                                  }}
+                                >
+                                  🔒 locked
+                                </span>
+                              )}
+                              {isTarget && (
+                                <span
+                                  style={{
+                                    marginLeft: 6,
+                                    fontSize: 10,
+                                    color: "var(--accent)",
+                                    fontWeight: 700,
+                                  }}
+                                >
+                                  KEEP
+                                </span>
+                              )}
+                            </div>
+                            <div
+                              style={{
+                                color: "var(--text-tertiary)",
+                                fontSize: 11,
+                                marginTop: 1,
+                              }}
+                            >
+                              {[cd.email, cd.company, cd.phone]
+                                .filter(Boolean)
+                                .join(" · ")}
+                              {c.addedAt ? ` · added ${c.addedAt}` : ""}
+                            </div>
+                          </div>
+                        </label>
+                      );
+                    })}
+                    <div
+                      style={{
+                        display: "flex",
+                        gap: 8,
+                        marginTop: 8,
+                        justifyContent: "flex-end",
+                      }}
+                    >
+                      <Btn
+                        size="sm"
+                        variant="secondary"
+                        onClick={() =>
+                          setDismissed((prev) => new Set(prev).add(gi))
+                        }
+                      >
+                        Not duplicates
+                      </Btn>
+                      <Btn
+                        size="sm"
+                        variant="primary"
+                        disabled={busy === gi}
+                        onClick={() => handleMerge(grp, gi)}
+                      >
+                        {busy === gi ? "Merging…" : "Merge into kept"}
+                      </Btn>
+                    </div>
+                  </div>
+                ),
+              )}
+            </div>
+          </div>
+        );
+      }
+
       // ─── Model Benchmark Modal ────────────────────────────────────────────────────
       // Re-scans the card images behind your locked (human-verified) contacts
       // with each selected model and scores field-level accuracy against the
@@ -6741,6 +7030,7 @@
         const [exportDone, setExportDone] = useState("");
         const [editingContact, setEditingContact] = useState(null);
         const [showBenchmark, setShowBenchmark] = useState(false);
+        const [showDuplicates, setShowDuplicates] = useState(false);
         // Which company groups are currently open. Default: all open.
         // Tracked here (not in each CompanyGroup) so a single button in
         // the toolbar can collapse / expand them all at once.
@@ -6754,9 +7044,8 @@
           });
         };
 
-        // Load real contacts on mount
-        useEffect(() => {
-          window
+        const reloadContacts = React.useCallback(() => {
+          return window
             .apiGet("/api/contacts")
             .then((data) => {
               setContacts(Array.isArray(data) ? data : []);
@@ -6767,6 +7056,11 @@
               setLoading(false);
             });
         }, []);
+
+        // Load real contacts on mount
+        useEffect(() => {
+          reloadContacts();
+        }, [reloadContacts]);
 
         const filtered = useMemo(() => {
           const q = search.toLowerCase();
@@ -7070,6 +7364,16 @@
 
                 <div style={{ flex: 1 }} />
 
+                {/* Find near-duplicate contacts (email match already merges) */}
+                <Btn
+                  size="sm"
+                  variant="secondary"
+                  icon={Icons.grid}
+                  onClick={() => setShowDuplicates(true)}
+                >
+                  Duplicates
+                </Btn>
+
                 {/* Model benchmark — locked contacts are the ground truth */}
                 <Btn
                   size="sm"
@@ -7277,6 +7581,13 @@
               <BenchmarkModal
                 lockedCount={contacts.filter((c) => c.locked).length}
                 onClose={() => setShowBenchmark(false)}
+              />
+            )}
+
+            {showDuplicates && (
+              <DuplicatesModal
+                onClose={() => setShowDuplicates(false)}
+                onMerged={reloadContacts}
               />
             )}
           </div>

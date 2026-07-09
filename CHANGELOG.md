@@ -2,6 +2,18 @@
 
 All notable changes to the Business Card Scanner project will be documented in this file.
 
+## [2.1.35] — 2026-07-08
+
+### Added
+
+- **Duplicate-contact detection** ("Duplicates" button, Contacts tab). Exact-email dupes already merge on save; this catches the rest — the same person scanned twice with a different or typo'd email. Conservative by design: a pair is flagged only on **same email**, or **matching name AND (matching company OR a shared phone number)**. "Matching name" needs ≥2 shared accent-folded tokens with one name a subset of the other (so "Gilberto Costa" ~ "Gilberto Moura Costa"), which avoids first-name-only collisions. Found 2 real pairs in the live data (Fabiola Souza `.com`/`.com.br`; André/Andre Marra — accent + different emails) with zero false positives.
+  - `ContactsRepository.find_duplicates()` (union-find, so A~B~C collapse into one group) + `merge_contacts(target, sources)`. Merge is **non-destructive** on the kept record (fills only its empty fields), respects locked-field protection (a locked target's name/email are never overwritten), inherits a card image/source file if missing, then deletes the sources. Regenerates the VCF.
+  - Endpoints: `GET /api/contacts/duplicates`, `POST /api/contacts/merge`.
+  - Review modal: each group shows both records side by side (email · company · phone · added-date), a radio to pick which to keep (defaults to the older one), lock badges, and Merge / "Not duplicates" per group. **Nothing merges without a click.**
+- 20 new tests (detection evidence rules, conservative rejections, transitive grouping, merge fill/protect/delete semantics). 362 total pass. UI verified end-to-end in the preview (both real pairs render; merge intentionally not run on live data).
+
+---
+
 ## [2.1.34] — 2026-07-08
 
 ### Added
