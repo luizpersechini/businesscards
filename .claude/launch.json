@@ -5,7 +5,8 @@
       "name": "fastapi-server",
       "runtimeExecutable": ".venv/bin/python3",
       "runtimeArgs": ["server.py"],
-      "port": 9247
+      "port": 9247,
+      "autoPort": true
     }
   ]
 }
