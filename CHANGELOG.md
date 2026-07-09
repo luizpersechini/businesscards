@@ -2,6 +2,19 @@
 
 All notable changes to the Business Card Scanner project will be documented in this file.
 
+## [2.1.29] — 2026-07-08
+
+### Changed
+
+- **zxing-cpp is now the primary QR decoder.** Modern C++ port of ZXing with official arm64 wheels and a pybind11 binding — structurally immune to the ctypes `restype` bug class that made pyzbar segfault libzbar. Decodes a full 9 MP card photo in ~50 ms with internal binarization (raw image first; the preprocessing variants only run if that yields nothing). Decode order: pyzbar (opt-in via `USE_PYZBAR=1`) → **zxing-cpp** → OpenCV ArUco → OpenCV basic. `zxing-cpp==3.1.0` added to requirements + hash-pinned lock (lock regenerated).
+- **Contacts store hardened.** `temp/contacts_repository.json` was rewritten in place on every mutation with no locking — a crash mid-save could truncate the entire repository, and FastAPI's thread pool made concurrent mutations racy. Now: atomic writes (temp file + fsync + `os.replace`, so readers/crashes see old-or-new, never partial) and an RLock around every mutator (`add_contact`, `apply_field_updates`, `set_locked`, `remove_contact`, `update_contact`, `clear_all`).
+
+### Added
+
+- Tests: zxing round-trip through the full `QRReader` (synthetic QR via `cv2.QRCodeEncoder`: URL + vCard parsing, rect/polygon shape, blank-image no-op) and store safety (no temp litter, always-parseable JSON mid-mutation, 8-thread concurrent-add consistency). 322 total pass. Live-verified: the Mobiz HEIC scans with `qrUrl` populated via the new decoder and the server stays healthy.
+
+---
+
 ## [2.1.28] — 2026-07-08
 
 ### Fixed

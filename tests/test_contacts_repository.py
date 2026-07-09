@@ -416,3 +416,53 @@ class TestDisplayName(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestPersistenceSafety(unittest.TestCase):
+    """Atomic writes + thread-safety of the JSON store."""
+
+    def setUp(self) -> None:
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.repo_path = str(Path(self.temp_dir.name) / "contacts.json")
+        self.repo = ContactsRepository(repo_path=self.repo_path)
+
+    def tearDown(self) -> None:
+        self.temp_dir.cleanup()
+
+    def test_save_leaves_no_temp_litter(self):
+        self.repo.add_contact({"fullName": "A", "email": "a@x.com"})
+        leftovers = [p for p in Path(self.temp_dir.name).iterdir() if p.suffix == ".tmp"]
+        self.assertEqual(leftovers, [])
+        # And the real file is valid JSON with the contact in it.
+        data = json.loads(Path(self.repo_path).read_text(encoding="utf-8"))
+        self.assertEqual(len(data), 1)
+
+    def test_save_is_atomic_replace(self):
+        """A reader opening the path mid-save must never see partial JSON.
+        We simulate by checking the file is parseable after every mutation."""
+        for i in range(20):
+            self.repo.add_contact({"fullName": f"P{i}", "email": f"p{i}@x.com"})
+            json.loads(Path(self.repo_path).read_text(encoding="utf-8"))  # must not raise
+
+    def test_concurrent_adds_are_consistent(self):
+        import threading as _t
+
+        def add_many(offset):
+            for i in range(10):
+                self.repo.add_contact(
+                    {"fullName": f"T{offset}-{i}", "email": f"t{offset}.{i}@x.com"}
+                )
+
+        threads = [_t.Thread(target=add_many, args=(n,)) for n in range(8)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        self.assertEqual(self.repo.count(), 80)
+        # Disk copy matches memory and is valid JSON.
+        data = json.loads(Path(self.repo_path).read_text(encoding="utf-8"))
+        self.assertEqual(len(data), 80)
+        # No duplicate ids from racing uuid generation / list appends.
+        ids = [c["id"] for c in data]
+        self.assertEqual(len(ids), len(set(ids)))

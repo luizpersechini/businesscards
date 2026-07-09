@@ -10,21 +10,43 @@ The repository supports:
   - Bulk export to VCF, Outlook CSV, Excel
 """
 
+import functools
 import json
 import os
+import tempfile
+import threading
 import uuid
 from datetime import datetime
 from typing import List, Dict, Optional
 
 
+def _synchronized(method):
+    """Run the method under the repository's RLock (reentrant, so nested
+    calls like mutator → _save are fine)."""
+
+    @functools.wraps(method)
+    def wrapper(self, *args, **kwargs):
+        with self._lock:
+            return method(self, *args, **kwargs)
+
+    return wrapper
+
+
 class ContactsRepository:
-    """Persistent JSON-backed store for approved contacts."""
+    """Persistent JSON-backed store for approved contacts.
+
+    Thread-safety: FastAPI runs sync endpoints and run_in_executor work on a
+    thread pool, so mutations can race. A single RLock guards every
+    read-modify-write; writes are atomic (temp file + os.replace) so a crash
+    mid-save can never leave a truncated/corrupt repository on disk.
+    """
 
     def __init__(self, repo_path: Optional[str] = None):
         if repo_path is None:
             base = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
             repo_path = os.path.join(base, "temp", "contacts_repository.json")
         self.repo_path = repo_path
+        self._lock = threading.RLock()
         self._contacts: List[Dict] = []
         self._load()
 
@@ -43,10 +65,31 @@ class ContactsRepository:
             self._contacts = []
 
     def _save(self):
-        """Persist contacts to disk."""
-        os.makedirs(os.path.dirname(self.repo_path), exist_ok=True)
-        with open(self.repo_path, "w", encoding="utf-8") as f:
-            json.dump(self._contacts, f, indent=2, ensure_ascii=False)
+        """Persist contacts to disk atomically.
+
+        Serialize to a temp file in the same directory, fsync, then
+        os.replace() over the real path — POSIX-atomic, so readers (and a
+        crash at any point) see either the old file or the new one, never a
+        partial write. The old in-place rewrite could truncate the whole
+        repository if the process died mid-dump.
+        """
+        with self._lock:
+            dirname = os.path.dirname(self.repo_path)
+            os.makedirs(dirname, exist_ok=True)
+            fd, tmp_path = tempfile.mkstemp(dir=dirname, prefix=".contacts_", suffix=".tmp")
+            try:
+                with os.fdopen(fd, "w", encoding="utf-8") as f:
+                    json.dump(self._contacts, f, indent=2, ensure_ascii=False)
+                    f.flush()
+                    os.fsync(f.fileno())
+                os.replace(tmp_path, self.repo_path)
+            except BaseException:
+                # Never leave temp litter behind on failure.
+                try:
+                    os.unlink(tmp_path)
+                except OSError:
+                    pass
+                raise
 
     # ── CRUD ───────────────────────────────────────────────────────────────
 
@@ -132,6 +175,7 @@ class ContactsRepository:
             # else: both equal → no-op
         return {"additions": additions, "conflicts": conflicts}
 
+    @_synchronized
     def add_contact(
         self, contact_data: Dict, source_file: str = "", vcf_content: str = "", card_id: str = ""
     ) -> Dict:
@@ -226,6 +270,7 @@ class ContactsRepository:
             "locked": False,
         }
 
+    @_synchronized
     def apply_field_updates(self, contact_id: str, updates: Dict) -> Optional[Dict]:
         """Apply a *partial* field-by-field update to a contact's data,
         used by the conflict-resolution flow when the user accepts the
@@ -267,6 +312,7 @@ class ContactsRepository:
             return contact
         return None
 
+    @_synchronized
     def set_locked(self, contact_id: str, locked: bool) -> bool:
         """Toggle the lock flag on a contact. Returns True on success."""
         for c in self._contacts:
@@ -277,6 +323,7 @@ class ContactsRepository:
                 return True
         return False
 
+    @_synchronized
     def remove_contact(self, contact_id: str) -> bool:
         """Remove a contact by its UUID. Returns True if found and removed."""
         before = len(self._contacts)
@@ -286,6 +333,7 @@ class ContactsRepository:
             return True
         return False
 
+    @_synchronized
     def update_contact(self, contact_id: str, contact_data: Dict) -> Optional[Dict]:
         """Update a contact's data. Returns the updated contact or None if not found."""
         for contact in self._contacts:
@@ -305,6 +353,7 @@ class ContactsRepository:
                 return contact
         return None
 
+    @_synchronized
     def clear_all(self) -> int:
         """Remove every contact. Returns the number of contacts deleted."""
         count = len(self._contacts)

@@ -56,6 +56,20 @@ else:
     PYZBAR_ERROR = "disabled by default (segfaults on arm64; set USE_PYZBAR=1 to enable)"
     print("✓ QR code reader loaded successfully (OpenCV backend; pyzbar disabled)")
 
+# ── zxing-cpp: PRIMARY decoder ───────────────────────────────────────────────
+# Modern C++ port of ZXing with official arm64 wheels and a pybind11 binding
+# (no ctypes restype fragility — the class of bug that made pyzbar segfault).
+# Decodes a full 9 MP card photo in ~50 ms with its own internal binarization,
+# so it usually needs none of our preprocessing variants.
+ZXING_AVAILABLE = False
+try:
+    import zxingcpp as _zxing
+
+    ZXING_AVAILABLE = True
+    print("✓ zxing-cpp QR decoder loaded (primary)")
+except Exception as _e:  # pragma: no cover — import-environment dependent
+    print(f"⚠ zxing-cpp not available ({_e}); falling back to OpenCV detectors")
+
 
 class QRReader:
     """Detects and reads QR codes from images."""
@@ -91,9 +105,8 @@ class QRReader:
         Detect and decode all QR codes in an image.
 
         Order: pyzbar (only when USE_PYZBAR=1 — see the module header; it
-        segfaults on arm64), then the OpenCV ArUco detector, then the basic
-        OpenCV detector. In the default configuration the OpenCV detectors do
-        all the work.
+        segfaults on arm64), then zxing-cpp (primary), then the OpenCV ArUco
+        detector, then the basic OpenCV detector.
 
         Args:
             image: Input image as numpy array (BGR format)
@@ -116,6 +129,17 @@ class QRReader:
                     return results
             except Exception as e:
                 print(f"⚠ pyzbar detection failed: {e}")
+
+        # zxing-cpp — primary decoder. Fast enough (≈50 ms on a 9 MP photo)
+        # to try the raw image first and preprocessing variants only if the
+        # raw image yields nothing.
+        if ZXING_AVAILABLE:
+            try:
+                results = self._detect_with_zxing(image)
+                if results:
+                    return results
+            except Exception as e:
+                print(f"⚠ zxing-cpp detection failed: {e}")
 
         # ArUco-based detector — more robust for coloured / skewed QR codes
         if self.use_opencv_fallback and self.opencv_aruco_detector is not None:
@@ -223,6 +247,43 @@ class QRReader:
         candidates.append(cv2.morphologyEx(otsu, cv2.MORPH_CLOSE, morph_kernel))
 
         return candidates
+
+    def _detect_with_zxing(self, image: np.ndarray) -> List[Dict]:
+        """Decode with zxing-cpp. Raw image first (it binarizes internally);
+        preprocessing variants only when the raw image yields nothing."""
+        candidates = [image] + self._build_preprocessing_variants(image)
+        codes = []
+        for candidate in candidates:
+            if not candidate.flags["C_CONTIGUOUS"]:
+                candidate = np.ascontiguousarray(candidate)
+            codes = _zxing.read_barcodes(candidate)
+            if codes:
+                break
+
+        results = []
+        for code in codes:
+            if not code.text:
+                continue
+            p = code.position
+            corners = [
+                (p.top_left.x, p.top_left.y),
+                (p.top_right.x, p.top_right.y),
+                (p.bottom_right.x, p.bottom_right.y),
+                (p.bottom_left.x, p.bottom_left.y),
+            ]
+            xs = [c[0] for c in corners]
+            ys = [c[1] for c in corners]
+            results.append(
+                {
+                    "data": code.text,
+                    "type": str(code.format),
+                    "rect": (min(xs), min(ys), max(xs) - min(xs), max(ys) - min(ys)),
+                    "polygon": corners,
+                    "parsed": self._parse_qr_data(code.text),
+                    "method": "zxing",
+                }
+            )
+        return results
 
     def _detect_with_pyzbar(self, image: np.ndarray) -> List[Dict]:
         """Detect QR codes using pyzbar library with multiple preprocessing strategies."""
