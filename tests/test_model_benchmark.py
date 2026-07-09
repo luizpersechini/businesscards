@@ -180,21 +180,24 @@ class TestNameMatching:
 
     def test_name_in_first_last_when_fullname_empty(self):
         assert field_matches(
-            "fullName", "Fabiola Souza",
+            "fullName",
+            "Fabiola Souza",
             {"fullName": None, "firstName": "Fabiola", "lastName": "Souza"},
         )
 
     def test_truth_subset_of_fuller_extracted_name(self):
         # 'Gilberto Costa' (truth) vs 'Gilberto Moura Costa' (full legal name)
         assert field_matches(
-            "fullName", "Gilberto Costa",
+            "fullName",
+            "Gilberto Costa",
             {"firstName": "Gilberto", "lastName": "Moura Costa"},
         )
 
     def test_short_truth_matches_first_last_even_if_fullname_is_title(self):
         # glm-ocr scramble: fullName holds a title, name is in first/last.
         assert field_matches(
-            "fullName", "Candida",
+            "fullName",
+            "Candida",
             {"fullName": "Commercial Manager", "firstName": "Cândida", "lastName": "Lucena"},
         )
 
@@ -203,7 +206,8 @@ class TestNameMatching:
 
     def test_wrong_name_still_fails(self):
         assert not field_matches(
-            "fullName", "Victor Becattini",
+            "fullName",
+            "Victor Becattini",
             {"firstName": "Marcelo", "lastName": "Dias"},
         )
 
@@ -215,29 +219,54 @@ class TestCompanySpacing:
     def test_spaced_vs_concatenated_with_legal_suffix(self):
         # 'Inter Maritima' (user's short form) == the model's full legal name.
         assert field_matches(
-            "company", "Inter Maritima",
+            "company",
+            "Inter Maritima",
             {"company": "Intermarítima Portos e Logística S.A."},
         )
-
-    def test_acronym_stays_a_miss(self):
-        # 'MME' / 'BNB' are genuinely different strings from the expansion —
-        # the benchmark should NOT credit them (user verified the short form).
-        assert not field_matches("company", "MME", {"company": "Ministério de Minas e Energia"})
-        assert not field_matches("company", "BNB", {"company": "Banco do Nordeste"})
 
     def test_one_char_ocr_error_stays_a_miss(self):
         # 'Maceló' misread as 'Maceió' is a real error, not a spacing quirk.
         assert not field_matches(
-            "company", "Maceló Logística & Serviços Portuários",
+            "company",
+            "Maceló Logística & Serviços Portuários",
             {"company": "Maceió Logística & Serviços Portuários"},
-        )
-
-    def test_different_division_stays_a_miss(self):
-        # 'Citibank' vs 'Citi Treasury and Trade Solutions' — not a prefix.
-        assert not field_matches(
-            "company", "Citibank", {"company": "Citi Treasury and Trade Solutions"}
         )
 
     def test_short_truth_not_false_matched(self):
         # 'IT' must not match 'digital' via a substring fluke.
         assert not field_matches("company", "IT", {"company": "digital"})
+
+
+class TestCompanyAcronymAndBrand:
+    """Bucket 2: verified short-form vs the model's full legal name.
+    Acronym-of-initials and brand-prefix matching close the derivable ones;
+    truly ambiguous cases (missing letters, wrong division) stay misses."""
+
+    def test_acronym_of_initials(self):
+        assert field_matches("company", "MME", {"company": "Ministério de Minas e Energia"})
+
+    def test_acronym_stopwords_skipped(self):
+        assert field_matches("company", "PUC", {"company": "Pontifícia Universidade Católica"})
+
+    def test_brand_prefix(self):
+        assert field_matches(
+            "company", "Citibank", {"company": "Citi Treasury and Trade Solutions"}
+        )
+        assert field_matches(
+            "company", "Citibank", {"company": "Citi Markets and Securities Services"}
+        )
+
+    def test_acronym_missing_letter_stays_miss(self):
+        # BNB = Banco do Nordeste *do Brasil*; the model dropped 'do Brasil',
+        # so its output can't yield the third letter — legitimately a miss.
+        assert not field_matches("company", "BNB", {"company": "Banco do Nordeste"})
+
+    def test_wrong_acronym_stays_miss(self):
+        assert not field_matches("company", "ABC", {"company": "Apple Inc"})
+
+    def test_short_first_word_guarded(self):
+        assert not field_matches("company", "San", {"company": "Sandvik Mining"})
+
+    def test_acronym_only_applies_to_company_not_title(self):
+        # A 3-letter title must not fuzzy-match an unrelated expansion.
+        assert not field_matches("title", "CEO", {"title": "Chief Executive of Operations Board"})

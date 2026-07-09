@@ -47,6 +47,56 @@ def _norm_text(s: str) -> str:
     return " ".join(re.findall(r"[a-z0-9]+", _fold(s)))
 
 
+# Filler words dropped when computing an organisation's initials. An acronym
+# like MME = Ministério de Minas e Energia skips 'de' and 'e'.
+_ORG_STOPWORDS = frozenset(
+    ("de", "do", "da", "dos", "das", "e", "of", "and", "the", "a", "o", "for")
+)
+
+
+def _is_subsequence(sub: str, seq: str) -> bool:
+    it = iter(seq)
+    return all(ch in it for ch in sub)
+
+
+def _acronym_match(a: str, b: str) -> bool:
+    """True if one side is an initials-acronym of the other.
+    'MME' == 'Ministério de Minas e Energia' (initials of significant words).
+    """
+    na, nb = _norm_text(a), _norm_text(b)
+    for short, long in ((na, nb), (nb, na)):
+        # Acronym side: a single 2-6 char token. Long side: multi-word.
+        if not short or " " in short or not (2 <= len(short) <= 6):
+            continue
+        words = long.split()
+        if len(words) < 2:
+            continue
+        initials_all = "".join(w[0] for w in words)
+        initials_sig = "".join(w[0] for w in words if w not in _ORG_STOPWORDS)
+        for ini in (initials_sig, initials_all):
+            if ini and short[0] == ini[0] and _is_subsequence(short, ini):
+                return True
+    return False
+
+
+def _brand_prefix_match(a: str, b: str) -> bool:
+    """True when a single-token brand is the first word of a longer name:
+    'Citibank' vs 'Citi Treasury and Trade Solutions' (share the 'Citi'
+    prefix). Guarded to a >=4 char first word to avoid short-prefix flukes.
+    """
+    na, nb = _norm_text(a), _norm_text(b)
+    for single, multi in ((na, nb), (nb, na)):
+        if not single or " " in single:
+            continue
+        words = multi.split()
+        if len(words) < 2:
+            continue
+        first = words[0]
+        if len(first) >= 4 and single.startswith(first):
+            return True
+    return False
+
+
 def _norm_email(s: str) -> str:
     return s.strip().lower()
 
@@ -132,6 +182,13 @@ def field_matches(field: str, truth_value: str, extracted: Dict) -> bool:
     # different string from the model's expanded form, not a spacing quirk).
     st, sv = nt.replace(" ", ""), nv.replace(" ", "")
     if min(len(st), len(sv)) >= 4 and (st.startswith(sv) or sv.startswith(st)):
+        return True
+    # Company only: an org may be verified as an acronym or brand short-form
+    # while the model reads the full legal name — 'MME' vs 'Ministério de
+    # Minas e Energia', 'Citibank' vs 'Citi Treasury and Trade Solutions'.
+    if field == "company" and (
+        _acronym_match(truth_value, value) or _brand_prefix_match(truth_value, value)
+    ):
         return True
     return False
 

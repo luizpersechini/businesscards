@@ -2,6 +2,22 @@
 
 All notable changes to the Business Card Scanner project will be documented in this file.
 
+## [2.1.33] — 2026-07-08
+
+### Changed
+
+- **Benchmark now credits acronym / brand short-forms for Company** (the "bucket 2" cases from the last investigation). When a company is verified as a short form but the model reads the full legal name, two new matchers close the derivable ones:
+  - **Acronym-of-initials** (`_acronym_match`): `"MME"` ↔ "Ministério de Minas e Energia" — the acronym is a subsequence of the significant words' initials (stopwords like _de/do/e_ skipped).
+  - **Brand-prefix** (`_brand_prefix_match`): `"Citibank"` ↔ "Citi Treasury and Trade Solutions" — a single-token brand that is the ≥4-char first word of a longer name.
+  - Applied to `company` only (not title). Guarded against flukes: short first words (`"San"` vs "Sandvik Mining"), wrong acronyms (`"ABC"` vs "Apple Inc"), and 1-char OCR errors (`"Maceló"`→"Maceió") all still count as misses.
+- **Not closeable by string logic:** `"BNB"` vs "Banco do Nordeste" — the acronym is \*Banco do Nordeste **do Brasil\***, and the model dropped "do Brasil", so its output literally lacks the third letter. Left as a miss rather than adding a guess that would risk false positives; a per-org alias list is the honest way to force it if ever wanted.
+
+### Notes
+
+- 7 new tests; two 2.1.32 tests that asserted MME/Citibank as misses were updated to the new intended behavior. 343 total pass. Scoring-only; extraction untouched. Of the 4 bucket-2 company misses, 3 now score correctly.
+
+---
+
 ## [2.1.32] — 2026-07-08
 
 ### Fixed
