@@ -21,7 +21,7 @@ Local-first, AI-powered business card scanner. Drop in JPEG / PNG / PDF cards, g
 
 ## ✨ Highlights
 
-- 🧠 **Multi-model vision** — defaults to **Qwen2.5-VL 7B** (best overall on real business cards in the built-in benchmark), with **MiniCPM-V**, **GLM-OCR** (fastest), **llama3.2-vision**, **llava**, **Claude**, or **OpenAI** a click away. The picker shows measured speed/quality ranks, and the requested model is honoured end-to-end (no silent fallback to whatever Ollama happens to have loaded).
+- 🧠 **Multi-model vision** — defaults to **Qwen2.5-VL 7B** (best overall on real business cards in the built-in benchmark), with **MiniCPM-V**, **GLM-OCR** (fastest), **llama3.2-vision**, **llava**, **Claude**, or **OpenAI** a click away. The picker shows measured speed/quality ranks, and the model you choose is the model that runs — the result badge names it (e.g. `QR + qwen2.5vl:7b`). If a selected model isn't installed, the scan falls back to one that is and says so, rather than failing.
 - 📊 **Benchmark against your own contacts** — your locked (human-verified) contacts are ground truth. The **Benchmark** button re-runs extraction on their card images with each model and scores field-level accuracy, so "which model should I use?" is answered by _your_ cards, not vendor claims. Forgiving matching (accent-folded, containment, acronym + brand short-forms, a user-editable `company_aliases.json`) keeps the scores honest.
 - 🔗 **QR-link resolution** — when a card's QR encodes a URL (a hosted vCard / digital business card) instead of inline fields, a **Fetch contact data** button pulls the contact from that page — after an SSRF/scheme/Safe-Browsing threat check. User-initiated: nothing hits the network during an unattended scan.
 - 👥 **Duplicate detection** — conservatively flags the same person scanned twice with a different or typo'd email (exact-email dupes already merge on save). Review pairs side by side and merge non-destructively into the record you keep; locked name/email are never overwritten.
@@ -147,7 +147,7 @@ LOCAL-FIRST provider chain: every scan tries Ollama → vLLM → Claude → Open
 | llama3.2-vision  | 11 B  | General vision, used historically.                                          |
 | llava:13b        | 13 B  | High-accuracy fallback when GPU memory allows.                              |
 
-`ollama pull <model>` installs any of them. The picker shows measured speed/quality ranks; the model you choose is honoured end-to-end. Use the **Benchmark** button (Contacts tab) to rank them on your own verified cards.
+`ollama pull <model>` installs any of them. The picker shows measured speed/quality ranks; the model you choose is the model that runs, and the per-card badge names it. If it isn't installed, the scan falls back to an installed vision model and logs the `ollama pull` command to fix it. Use the **Benchmark** button (Contacts tab) to rank them on your own verified cards.
 
 ---
 
@@ -164,6 +164,26 @@ On the **Contacts** tab: **Benchmark** ranks your installed models against your 
 ---
 
 ## 🔧 Troubleshooting
+
+<details>
+<summary><b>Scan returns "0 cards found"</b></summary>
+
+Most often the selected vision model isn't installed. Check the server log for:
+
+```
+⚠ Requested model 'qwen2.5vl:7b' is not installed — using 'glm-ocr:latest' instead.
+```
+
+The scan still runs on a fallback model, so a hard **0 cards** usually means _no_ vision model is installed at all, or Ollama isn't running:
+
+```bash
+ollama list                   # what's actually installed?
+ollama pull qwen2.5vl:7b      # install the default
+```
+
+Note that `llama3.1` / `llama3.2` are **text-only** — they don't count as vision models. You need at least one of `qwen2.5vl`, `minicpm-v`, `glm-ocr`, `llama3.2-vision`, or `llava`.
+
+</details>
 
 <details>
 <summary><b>Ollama not detected</b></summary>
