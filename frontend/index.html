@@ -5398,7 +5398,9 @@
                       },
                       {
                         label: "Avg time",
-                        value: `${(cards.reduce((a, c) => a + c.time, 0) / cards.length).toFixed(1)}s`,
+                        value: cards.length
+                          ? `${(cards.reduce((a, c) => a + c.time, 0) / cards.length).toFixed(1)}s`
+                          : "—",
                         color: "var(--text-primary)",
                       },
                     ].map(({ label, value, color }) => (

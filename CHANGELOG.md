@@ -2,6 +2,16 @@
 
 All notable changes to the Business Card Scanner project will be documented in this file.
 
+## [2.1.36] — 2026-07-09
+
+### Fixed
+
+- **Scans returned 0 cards when the selected model wasn't installed.** Regression from 2.1.28: the model-routing fix applied the requested model to the provider config **unconditionally**, overriding the Ollama provider's own "fall back to any installed vision model" logic. So when `qwen2.5vl:7b` (the 2.1.31 default) was absent from Ollama, every scan 404'd (`model 'qwen2.5vl:7b' not found`), all providers failed, and the UI showed `0 Cards found`. `extract_with_fallback` now only forces the requested model **if it's actually installed** (tag-tolerant: `glm-ocr` matches `glm-ocr:latest`); otherwise it keeps the installed model `check_availability()` picked and logs the substitution loudly with the `ollama pull` command to fix it. Providers that can't enumerate their models (cloud) get the benefit of the doubt.
+- **`Avg time` showed `NaNs`** on a zero-card result (divide-by-zero); now shows `—`.
+- 5 new tests (uninstalled → fallback, installed → honoured, tag-tolerant match, helper unit, unknown-lister benefit-of-doubt). 367 total pass.
+
+---
+
 ## [2.1.35] — 2026-07-08
 
 ### Added

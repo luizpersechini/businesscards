@@ -166,6 +166,35 @@ class ProviderFactory:
         return None
 
     @staticmethod
+    def _model_is_installed(provider, model: str) -> bool:
+        """Is `model` actually available on this provider?
+
+        Only meaningful for Ollama (which can 404 on an uninstalled tag).
+        Cloud providers accept any model string, and a provider that can't
+        enumerate its models is given the benefit of the doubt — we'd rather
+        attempt the call than silently substitute.
+        """
+        lister = getattr(provider, "get_available_models", None)
+        if not callable(lister):
+            return True
+        try:
+            installed = lister() or []
+        except Exception:
+            return True
+        # If we can't interpret the listing (unavailable, wrong type, empty),
+        # attempt the call rather than silently substituting a model.
+        if not isinstance(installed, (list, tuple, set)) or not installed:
+            return True
+        # Tag-tolerant: a request for "qwen2.5vl" matches "qwen2.5vl:7b",
+        # and "glm-ocr" matches "glm-ocr:latest".
+        m = (model or "").lower()
+        for name in installed:
+            n = (name or "").lower()
+            if n == m or n.startswith(m + ":") or m.startswith(n.split(":")[0] + ":"):
+                return True
+        return False
+
+    @staticmethod
     def _model_provider_type(model: str) -> ProviderType:
         """Which provider a UI model string belongs to. 'claude-*' → Claude,
         'gpt-*' → OpenAI, everything else is an Ollama tag."""
@@ -233,8 +262,27 @@ class ProviderFactory:
             # Honour the explicitly-requested model. Must happen AFTER
             # check_provider_status(), which (for Ollama) may have replaced
             # config.model_name with whatever model is currently loaded.
+            #
+            # BUT only if that model is actually installed. Forcing a missing
+            # model makes Ollama 404 and the whole scan return zero cards —
+            # instead we keep the model check_availability() already picked
+            # (an installed vision model) and log the substitution loudly.
             if model and config.provider_type == model_target:
-                config.model_name = model
+                if self._model_is_installed(provider, model):
+                    config.model_name = model
+                else:
+                    logger.warning(
+                        "Requested model %r is not installed; falling back to %r. "
+                        "Install it with: ollama pull %s",
+                        model,
+                        config.model_name,
+                        model,
+                    )
+                    print(
+                        f"⚠ Requested model '{model}' is not installed — "
+                        f"using '{config.model_name}' instead. "
+                        f"Install it with: ollama pull {model}"
+                    )
 
             logger.info(f"Trying provider: {config.provider_type.value} ({config.model_name})")
             result = provider.extract_contact(card_image, qr_data)

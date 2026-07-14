@@ -335,3 +335,86 @@ class TestCompanyAliases:
         good.write_text('[["A", "Alpha"], ["B", "Beta"]]', encoding="utf-8")
         groups = load_company_aliases(str(good))
         assert groups == [["A", "Alpha"], ["B", "Beta"]]
+
+
+class TestMissingModelFallback:
+    """A requested model that isn't installed must NOT be forced onto the
+    config — Ollama 404s and the whole scan returns zero cards. Regression
+    for: default changed to qwen2.5vl:7b, user's Ollama had it pruned,
+    every scan returned 0 contacts."""
+
+    def _factory_with_installed(self, monkeypatch, installed, requested):
+        import numpy as np
+        from unittest.mock import MagicMock
+
+        from utils.models import ContactInfo, ProviderStatus, ProviderType, ScanResult
+        from utils.providers.factory import ProviderFactory
+
+        factory = ProviderFactory()
+        cfg = next(c for c in factory.configs if c.provider_type == ProviderType.OLLAMA)
+
+        seen = {}
+        provider = MagicMock()
+        provider.get_available_models.return_value = installed
+
+        def _extract(image, qr):
+            seen["model_at_call"] = cfg.model_name
+            return ScanResult(
+                contact=ContactInfo(full_name="X Y", email="x@y.com"),
+                confidence=0.9,
+                provider_used=ProviderType.OLLAMA,
+                processing_time_ms=1,
+            )
+
+        provider.extract_contact.side_effect = _extract
+        monkeypatch.setattr(factory, "_get_or_create_provider", lambda c: provider)
+
+        def _status(pt):
+            if pt == ProviderType.OLLAMA:
+                # check_availability() picks an installed vision model.
+                cfg.model_name = "glm-ocr:latest"
+                return ProviderStatus.AVAILABLE
+            return ProviderStatus.UNAVAILABLE
+
+        monkeypatch.setattr(factory, "check_provider_status", _status)
+        factory.extract_with_fallback(
+            np.zeros((10, 10, 3), dtype=np.uint8), None, model=requested
+        )
+        return seen["model_at_call"]
+
+    def test_uninstalled_model_falls_back(self, monkeypatch):
+        used = self._factory_with_installed(
+            monkeypatch, ["glm-ocr:latest", "llama3.1:8b"], "qwen2.5vl:7b"
+        )
+        assert used == "glm-ocr:latest"  # NOT the missing qwen
+
+    def test_installed_model_is_honoured(self, monkeypatch):
+        used = self._factory_with_installed(
+            monkeypatch, ["glm-ocr:latest", "qwen2.5vl:7b"], "qwen2.5vl:7b"
+        )
+        assert used == "qwen2.5vl:7b"
+
+    def test_tag_tolerant_match(self, monkeypatch):
+        # Requesting the bare name matches the installed tagged variant.
+        used = self._factory_with_installed(monkeypatch, ["glm-ocr:latest"], "glm-ocr")
+        assert used == "glm-ocr"
+
+    def test_installed_check_helper(self):
+        from unittest.mock import MagicMock
+
+        from utils.providers.factory import ProviderFactory
+
+        p = MagicMock()
+        p.get_available_models.return_value = ["glm-ocr:latest", "qwen2.5vl:7b"]
+        assert ProviderFactory._model_is_installed(p, "qwen2.5vl:7b") is True
+        assert ProviderFactory._model_is_installed(p, "glm-ocr") is True
+        assert ProviderFactory._model_is_installed(p, "minicpm-v") is False
+
+    def test_unknown_lister_gives_benefit_of_doubt(self):
+        from utils.providers.factory import ProviderFactory
+
+        class NoLister:
+            pass
+
+        # Cloud providers can't enumerate models — attempt the call anyway.
+        assert ProviderFactory._model_is_installed(NoLister(), "claude-3") is True
