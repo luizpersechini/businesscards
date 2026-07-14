@@ -2,6 +2,20 @@
 
 All notable changes to the Business Card Scanner project will be documented in this file.
 
+## [2.1.37] — 2026-07-09
+
+### Fixed
+
+- **Per-card time was a hardcoded placeholder.** `server._contact_data_to_frontend` read `card.get("processing_time", 1.0)`, but nothing ever _set_ `processing_time` — so every card reported `1.0s` and the Scanner tab's "Avg time" was meaningless. `CardProcessor.process_single_card` now measures real wall-clock (QR detection + vision + repairs) and puts it on the card; the server default drops to `0.0` instead of a fake `1.0`.
+- **The "via" badge always said "GLM-OCR", whatever model actually ran.** It was hardcoded — so after the qwen default (and especially after a not-installed substitution) the badge lied about which model produced the contact. `ScanResult` now carries `model_used` (set by `extract_with_fallback` to the model that _actually_ ran, post-fallback), threaded to the UI via the same `_`-prefixed stash pattern as `_qr_url`/`_detected_lang` (popped server-side, never reaches the saved contact). The badge now reads e.g. `qwen2.5vl:7b` or `QR + qwen2.5vl:7b`.
+- Frontend `via` checks that compared against the literal `"QR + GLM-OCR"` now match on the `QR` prefix, so the "Via QR" stat and badge colour stay correct with any model name.
+
+### Notes
+
+- Verified on a real scan: `via: QR + qwen2.5vl:7b`, `time: 10.4s` (was `1.0s`), and `_model_used` confirmed absent from the saved contact. 367 tests pass.
+
+---
+
 ## [2.1.36] — 2026-07-09
 
 ### Fixed

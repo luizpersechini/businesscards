@@ -3401,9 +3401,12 @@
                     <Badge
                       label={card.via}
                       color={
+                        // `via` now names the model that actually ran, e.g.
+                        // "qwen2.5vl:7b" or "QR + qwen2.5vl:7b" — match on the
+                        // QR prefix rather than an exact model string.
                         card.via === "QR Code"
                           ? "green"
-                          : card.via === "QR + GLM-OCR"
+                          : (card.via || "").startsWith("QR")
                             ? "orange"
                             : "blue"
                       }
@@ -5390,9 +5393,10 @@
                       },
                       {
                         label: "Via QR",
-                        value: cards.filter(
-                          (c) =>
-                            c.via === "QR Code" || c.via === "QR + GLM-OCR",
+                        // `via` is "QR Code" or "QR + <model>" — match the
+                        // prefix, not a hardcoded model name.
+                        value: cards.filter((c) =>
+                          (c.via || "").startsWith("QR"),
                         ).length,
                         color: "var(--warning)",
                       },

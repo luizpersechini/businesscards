@@ -288,6 +288,9 @@ class ProviderFactory:
             result = provider.extract_contact(card_image, qr_data)
 
             if result.error is None and result.contact.has_minimum_data():
+                # Record the model that actually ran — may differ from the
+                # requested one if that wasn't installed.
+                result.model_used = config.model_name
                 return result
 
             # Build a descriptive error — never log bare "None"

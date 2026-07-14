@@ -393,14 +393,23 @@ def _contact_data_to_frontend(
 ) -> dict:
     """Map CardProcessor output dict to the shape the React frontend expects."""
     cd = card.get("contact_data") or {}
+
+    # Name the model that ACTUALLY ran, not a hardcoded "GLM-OCR" — the badge
+    # used to lie whenever any other model was selected (or substituted).
+    # Popped so it never reaches the saved contact.
+    model_used = cd.pop("_model_used", None) if isinstance(cd, dict) else None
+    model_label = model_used or "Vision"
+
     via_qr = card.get("via_qr")
     if via_qr is True:
         via = "QR Code"
     elif via_qr == "hybrid":
-        via = "QR + GLM-OCR"
+        via = f"QR + {model_label}"
     else:
-        via = "GLM-OCR"
-    processing_time = card.get("processing_time", 1.0)
+        via = model_label
+    # Real wall-clock seconds, set by CardProcessor.process_single_card.
+    # (Was a hardcoded 1.0 s placeholder — every card reported "1.0s".)
+    processing_time = card.get("processing_time", 0.0)
 
     # Create thumbnail if card image exists
     thumbnail = None

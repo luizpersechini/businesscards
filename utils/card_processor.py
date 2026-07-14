@@ -7,6 +7,7 @@ import cv2
 import numpy as np
 from typing import Callable, Dict, List, Optional, Tuple
 import logging
+import time
 
 from utils.improved_card_detector import ImprovedCardDetector
 from utils.qr_reader import QRReader
@@ -242,8 +243,15 @@ class CardProcessor:
             if scan_result.contact and scan_result.contact.has_minimum_data():
                 contact_data = scan_result.contact.to_legacy_dict()
                 via_qr = "hybrid" if qr_data else False
+                # Stash the model that actually ran so the UI badge can name
+                # it (lifted + popped in server._contact_data_to_frontend, so
+                # it never reaches the saved contact).
+                if scan_result.model_used:
+                    contact_data["_model_used"] = scan_result.model_used
                 logger.info(
-                    "Vision analysis successful%s", " (QR hybrid)" if via_qr == "hybrid" else ""
+                    "Vision analysis successful%s (model: %s)",
+                    " (QR hybrid)" if via_qr == "hybrid" else "",
+                    scan_result.model_used,
                 )
             else:
                 error_msg = scan_result.error or "Unknown vision error"
@@ -318,6 +326,12 @@ class CardProcessor:
         """
         logger.info("Processing single card")
 
+        # Wall-clock for the whole card (QR detection + vision + repairs).
+        # This is what the UI's per-card "time" and "Avg time" report — it
+        # used to be a hardcoded 1.0 s placeholder because nothing ever set
+        # `processing_time` on the card dict.
+        started = time.monotonic()
+
         # Extract contact
         contact_data, via_qr = self.extract_contact(card_image_bgr, vision_model, vision_timeout)
         if not contact_data:
@@ -330,12 +344,16 @@ class CardProcessor:
             filename = self.vcf_generator.contact_to_filename(contact_data)
             logger.info(f"Generated VCF: {filename}")
 
+            elapsed = time.monotonic() - started
+            logger.info(f"Card processed in {elapsed:.1f}s (via_qr={via_qr})")
+
             return {
                 "filename": filename,
                 "contact_data": contact_data,
                 "vcf_content": vcf_string,
                 "card_image": card_image_rgb,
                 "via_qr": via_qr,
+                "processing_time": elapsed,  # seconds
             }
         except Exception as e:
             logger.error(f"VCF generation failed: {e}")
