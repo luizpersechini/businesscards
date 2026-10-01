@@ -1280,132 +1280,25 @@ def _annotate_image(
             # replicate the detector's gap-detection logic to get actual
             # row/col bounds; if gap detection finds nothing, fall back to
             # uniform inference + blank filter.
-            from utils.improved_card_detector import _is_blank_cell
-
-            gray = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
-            edges = cv2.Canny(gray, 50, 150)
-            h_proj = np.sum(edges, axis=1).astype(float)
-            v_proj = np.sum(edges, axis=0).astype(float)
-            h_smooth = np.convolve(h_proj, np.ones(3) / 3, mode="same")
-            v_smooth = np.convolve(v_proj, np.ones(3) / 3, mode="same")
-
-            _gap_detector = ImprovedCardDetector()
-            row_splits = _gap_detector._find_gap_positions(h_smooth, h, cross_length=w)
-            col_splits = _gap_detector._find_gap_positions(v_smooth, w, cross_length=h)
-
-            used_gap_split = bool(row_splits or col_splits)
-            if used_gap_split:
-                # Gap-detection found real edges between cards. Don't apply
-                # the blank-cell filter (tuned for uniform-grid fallback;
-                # over-rejects sparse white cards like Marcos's Spanish
-                # consulate card).
-                row_bounds = [0] + row_splits + [h]
-                col_bounds = [0] + col_splits + [w]
-
-                # ─── Post-process: regularize rows/cols ─────────────────
-                # The gap detector often (a) treats the outer margin as a
-                # row separator, creating a tiny empty band at the top/
-                # bottom; (b) misses the gap between two card rows,
-                # producing a band that's > 1.6× the median. Fix:
-                #   1. Drop bands < 50% of median (margins)
-                #   2. For an oversized band, re-run gap detection on
-                #      JUST that slice with relaxed thresholds to find
-                #      the missed gap. If that fails, fall back to even
-                #      splitting as a last resort.
-                def find_inner_gaps(bgr_slice, axis, expected_count):
-                    """Look for `expected_count` actual gaps inside a slice."""
-                    if expected_count < 1:
-                        return []
-                    g = cv2.cvtColor(bgr_slice, cv2.COLOR_BGR2GRAY)
-                    e = cv2.Canny(g, 50, 150)
-                    if axis == "row":
-                        proj = np.sum(e, axis=1).astype(float)
-                        length = bgr_slice.shape[0]
-                        cross = bgr_slice.shape[1]
-                    else:
-                        proj = np.sum(e, axis=0).astype(float)
-                        length = bgr_slice.shape[1]
-                        cross = bgr_slice.shape[0]
-                    sm = np.convolve(proj, np.ones(3) / 3, mode="same")
-                    d2 = ImprovedCardDetector()
-                    splits = d2._find_gap_positions(sm, length, cross_length=cross)
-                    if len(splits) >= expected_count:
-                        # Keep the deepest `expected_count` gaps (lowest
-                        # smoothed projection at each candidate position)
-                        scored = sorted(splits, key=lambda p: sm[max(0, min(len(sm) - 1, p))])
-                        return sorted(scored[:expected_count])
-                    return splits
-
-                def regularize(bounds: list, axis: str) -> list:
-                    if len(bounds) < 3:
-                        return bounds
-                    spans = [bounds[i + 1] - bounds[i] for i in range(len(bounds) - 1)]
-                    median = sorted(spans)[len(spans) // 2]
-                    # Drop tiny outer bands (top/bottom margin only)
-                    if spans[0] < 0.5 * median:
-                        bounds = bounds[1:]
-                        spans = [bounds[i + 1] - bounds[i] for i in range(len(bounds) - 1)]
-                    if spans and spans[-1] < 0.5 * median:
-                        bounds = bounds[:-1]
-                        spans = [bounds[i + 1] - bounds[i] for i in range(len(bounds) - 1)]
-                    # Re-anchor first to image edge
-                    bounds[0] = 0
-                    # Split bands that look like N merged rows
-                    out = [bounds[0]]
-                    for i in range(len(bounds) - 1):
-                        a, b = bounds[i], bounds[i + 1]
-                        span = b - a
-                        n_sub = max(1, int(round(span / median)))
-                        if n_sub > 1:
-                            # Try to find the real gaps inside this slice
-                            if axis == "row":
-                                sl = bgr[a:b]
-                            else:
-                                sl = bgr[:, a:b]
-                            inner = find_inner_gaps(sl, axis, n_sub - 1)
-                            if len(inner) == n_sub - 1:
-                                for s in inner:
-                                    out.append(a + s)
-                            else:
-                                # Fallback: even split
-                                for k in range(1, n_sub):
-                                    out.append(a + int(round(k * span / n_sub)))
-                        out.append(b)
-                    return out
-
-                row_bounds = regularize(row_bounds, "row")
-                col_bounds = regularize(col_bounds, "col")
-                # Re-anchor to image extent so we don't lose pixels
-                row_bounds[0] = 0
-                row_bounds[-1] = h
-                col_bounds[0] = 0
-                col_bounds[-1] = w
-
-                inferred_grid = (len(row_bounds) - 1, len(col_bounds) - 1)
-                for r in range(len(row_bounds) - 1):
-                    for c in range(len(col_bounds) - 1):
-                        y1, y2 = row_bounds[r], row_bounds[r + 1]
-                        x1, x2 = col_bounds[c], col_bounds[c + 1]
-                        if y2 - y1 < 80 or x2 - x1 < 80:
-                            continue
-                        boxes.append(("rect", (x1, y1, x2 - x1, y2 - y1)))
-            else:
-                # Last-resort uniform grid (no gaps found at all)
-                sample_h, sample_w = detected[0][0].shape[:2]
-                grid_rows = max(1, round(h / sample_h))
-                grid_cols = max(1, round(w / sample_w))
-                inferred_grid = (grid_rows, grid_cols)
-                ch = h // grid_rows
-                cw = w // grid_cols
-                for r in range(grid_rows):
-                    for c in range(grid_cols):
-                        x1 = c * cw
-                        y1 = r * ch
-                        x2 = (c + 1) * cw if c < grid_cols - 1 else w
-                        y2 = (r + 1) * ch if r < grid_rows - 1 else h
-                        tile = bgr[y1:y2, x1:x2]
-                        if not _is_blank_cell(tile):
-                            boxes.append(("rect", (x1, y1, x2 - x1, y2 - y1)))
+            # Detector returned regions without contours (gap or uniform
+            # fallback). Take drawable positions from the SHARED overlay
+            # inference. A duplicated copy of that logic used to live here,
+            # so fixes to _gap_detect_and_regularize (relative sliver
+            # filter) never reached the preview: two stacked cards
+            # previewed as three, with a ~20px gutter drawn as a card.
+            rects = _gap_detect_and_regularize(bgr)
+            if not rects:
+                # Nothing gap-derived: the detector treated the frame as
+                # one card — show exactly that, not a re-inferred grid.
+                rects = [(0, 0, w, h)]
+            # Only a real sheet (>= 4 tiles) justifies the "Apply NxM grid"
+            # banner; 1-3 regions is a few cards, not a layout.
+            if len(rects) >= 4:
+                ys = sorted({y for _, y, _, _ in rects})
+                xs = sorted({x for x, _, _, _ in rects})
+                inferred_grid = (len(ys), len(xs))
+            for rect in rects:
+                boxes.append(("rect", rect))
 
     # In grid mode the React overlay draws everything (outer crop, internal
     # dividers, dim mask, drag handles, tile numbers) — skip server-side

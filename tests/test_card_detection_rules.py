@@ -95,3 +95,17 @@ class TestOverlayPath:
             assert all(h >= 0.3 * med for h in heights)
         # A 2-3 tile gap result must never out-vote the detector.
         assert len(rects) < 4
+
+    def test_preview_two_stacked_cards_draws_two_no_grid_banner(self):
+        """The /api/preview path used to carry its OWN copy of the gap
+        overlay logic, so server-side fixes never reached it: two stacked
+        cards previewed as three (a ~20px gutter drawn as a card) plus a
+        bogus 'Apply 3x1 grid' banner. It now calls the shared function."""
+        import server
+
+        img = np.full((2400, 1500, 3), 140, dtype=np.uint8)
+        _card(img, 250, 200, 1000, 600)
+        _card(img, 250, 1400, 1000, 600)
+        _jpg, count, _lines, inferred_grid = server._annotate_image(img, "auto", 2, 2)
+        assert count == 2
+        assert inferred_grid is None  # 1-3 regions never trigger the banner

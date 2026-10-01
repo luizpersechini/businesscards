@@ -18,7 +18,7 @@ bash setup.sh                # first-time setup (creates .venv, installs from re
 ## Test
 
 ```
-.venv/bin/python -m pytest   # 372 tests (see pyproject.toml for config)
+.venv/bin/python -m pytest   # 373 tests (see pyproject.toml for config)
 pytest --cov=utils           # with coverage report → htmlcov/
 ```
 

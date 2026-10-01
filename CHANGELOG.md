@@ -2,6 +2,14 @@
 
 All notable changes to the Business Card Scanner project will be documented in this file.
 
+## [2.1.39] — 2026-10-01
+
+### Fixed
+
+- **Preview still showed the sliver after 2.1.38.** `/api/preview` carried its _own_ ~125-line copy of the gap-overlay inference (`_find_gap_positions` → regularize → rects), so the relative sliver filter and the ≥4-tile banner gate added to `_gap_detect_and_regularize` never reached it — scans were fixed, previews weren't. The duplicated block is replaced by a call to the shared function; when it yields nothing the preview draws the frame as one card instead of re-inferring a uniform grid, and the "Apply N×M grid" banner only fires for ≥4 tiles. Verified: two stacked cards → 2 boxes, no banner (synthetic test added; 373 total pass).
+
+---
+
 ## [2.1.38] — 2026-10-01
 
 ### Fixed
