@@ -255,6 +255,41 @@ class OllamaVisionProvider(VisionProvider):
                 else:
                     contact_dict = self.parse_json_response(response_text)
 
+                # Diagnostic: when the model's reply yields no usable contact
+                # (no name, no email) the factory only reports "extracted no
+                # usable contact data" — the raw reply is otherwise lost.
+                # Log enough to tell a parse failure from a genuine blank.
+                _cd = contact_dict or {}
+                if not any(_cd.get(k) for k in ("fullName", "firstName", "lastName", "email")):
+                    msg = (
+                        f"⚠ {self.config.model_name}: reply produced no name/email "
+                        f"(json_schema={use_json_schema}, parsed_keys="
+                        f"{sorted(k for k, v in _cd.items() if v)}, "
+                        f"reply_len={len(response_text)}). Raw head: "
+                        f"{response_text[:500]!r}"
+                    )
+                    h_, w_ = card_image.shape[:2]
+                    msg += f" | crop={w_}x{h_}"
+                    # Keep the exact crop the model saw — without it a failure
+                    # on a user upload is unreproducible (uploads aren't
+                    # archived when a scan yields zero cards).
+                    try:
+                        import cv2 as _cv2
+
+                        dbg_dir = os.path.join(
+                            os.path.dirname(os.path.dirname(os.path.dirname(__file__))),
+                            "temp",
+                            "debug",
+                        )
+                        os.makedirs(dbg_dir, exist_ok=True)
+                        dbg_path = os.path.join(dbg_dir, f"failed_crop_{int(time.time())}.png")
+                        _cv2.imwrite(dbg_path, card_image)
+                        msg += f" | saved {dbg_path}"
+                    except Exception as _e:  # never let diagnostics break a scan
+                        msg += f" | (crop not saved: {_e})"
+                    logger.warning(msg)
+                    print(msg)
+
                 # Optional LLM post-correction with language-aware routing.
                 # Off by default. Configure per-language model overrides:
                 #   OCR_POST_CORRECTION_MODEL_EN=qwen2.5:3b
