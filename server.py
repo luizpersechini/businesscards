@@ -693,6 +693,15 @@ def _gap_detect_and_regularize(bgr: np.ndarray) -> list:
             if y2 - y1 < 80 or x2 - x1 < 80:
                 continue
             rects.append((x1, y1, x2 - x1, y2 - y1))
+
+    # Drop slivers relative to the typical tile, not an absolute pixel
+    # floor: the inter-card gutter on a 4032px phone photo is ~80-100px
+    # tall and sailed past the 80px check above, surfacing as a bogus
+    # "card". Anything under 30% of the median width/height is a gutter.
+    if len(rects) >= 2:
+        med_w = float(np.median([w for _, _, w, _ in rects]))
+        med_h = float(np.median([h for _, _, _, h in rects]))
+        rects = [(x, y, w, h) for x, y, w, h in rects if w >= 0.3 * med_w and h >= 0.3 * med_h]
     return rects
 
 
@@ -777,7 +786,10 @@ def _process_with_refinement(
         # Detector fell back to rectangular tiles. Run our own gap +
         # regularize pass to catch any missed rows/cols.
         overlay_rects = _gap_detect_and_regularize(image_bgr)
-        if len(overlay_rects) > len(detected):
+        # Only let a gap-inferred tiling override the detector when it
+        # looks like a real sheet (>= 4 tiles). A 2-3 tile result is the
+        # classic false split of a single card along a crease/shadow.
+        if len(overlay_rects) >= 4 and len(overlay_rects) > len(detected):
             use_overlay_grid = True
 
     results = []

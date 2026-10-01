@@ -14,18 +14,18 @@ class ImprovedCardDetector:
     """
     Enhanced card detector using document scanner algorithms.
     """
-    
+
     def __init__(self, min_area_percent=5, max_area_percent=40):
         """
         Initialize the improved card detector.
-        
+
         Args:
             min_area_percent: Minimum area as percentage of image (default 5%)
             max_area_percent: Maximum area as percentage of image (default 40%)
         """
         self.min_area_percent = min_area_percent
         self.max_area_percent = max_area_percent
-    
+
     def detect_cards(self, image: np.ndarray) -> List[Tuple[np.ndarray, np.ndarray]]:
         """
         Detect business cards using advanced document scanning techniques.
@@ -77,17 +77,21 @@ class ImprovedCardDetector:
             # Strategy A: Canny with lower thresholds (good for faint edges on clean scans)
             ("canny_low", cv2.Canny(blurred, 20, 80)),
             # Strategy B: Canny with standard thresholds
-            ("canny_mid",  cv2.Canny(blurred, 40, 120)),
+            ("canny_mid", cv2.Canny(blurred, 40, 120)),
             # Strategy C: Canny with higher thresholds (fewer false positives)
             ("canny_high", cv2.Canny(blurred, 60, 150)),
             # Strategy D: Adaptive threshold (excellent for grid lines on clean scans)
-            ("adaptive", cv2.adaptiveThreshold(blurred, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
-                                               cv2.THRESH_BINARY_INV, 15, 3)),
+            (
+                "adaptive",
+                cv2.adaptiveThreshold(
+                    blurred, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY_INV, 15, 3
+                ),
+            ),
         ]
 
         # Dilate/erode kernel — larger for clean scans to bridge thin gaps
         kernel_small = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
-        kernel_med   = cv2.getStructuringElement(cv2.MORPH_RECT, (5, 5))
+        kernel_med = cv2.getStructuringElement(cv2.MORPH_RECT, (5, 5))
 
         best_cards: List[Tuple[np.ndarray, np.ndarray]] = []
 
@@ -96,11 +100,10 @@ class ImprovedCardDetector:
             closed = cv2.morphologyEx(edge_map, cv2.MORPH_CLOSE, kernel_med, iterations=1)
             # Dilate to thicken edges, then erode to reduce noise
             dilated = cv2.dilate(closed, kernel_small, iterations=1)
-            eroded  = cv2.erode(dilated, kernel_small, iterations=1)
+            eroded = cv2.erode(dilated, kernel_small, iterations=1)
 
             cards = self._contours_to_cards(
-                eroded, original, resized, ratio,
-                min_area_resized, max_area_resized
+                eroded, original, resized, ratio, min_area_resized, max_area_resized
             )
             if len(cards) > len(best_cards):
                 best_cards = cards
@@ -110,20 +113,59 @@ class ImprovedCardDetector:
         # ── Fallbacks ──────────────────────────────────────────────────────
         # If contour detection found fewer than 4 cards, try edge-density
         # grid detection.
-        if len(detected_cards) < 4:
+        # A tiling may only replace contour results when it looks like a
+        # real sheet (>= 4 tiles). Accepting any tiling that merely had
+        # "more" pieces split every single-card phone photo into 2-8 junk
+        # regions (audit over 95 archived originals: IMG_1658 -> 8,
+        # IMG_2525 -> 4, IMG_2628 -> 7, all identical aspects). A 1-3
+        # tile result is a crease/shadow false split, not a layout.
+        MIN_SHEET_TILES = 4
+        H, W = original.shape[:2]
+        edge_confident_single = False
+
+        def _plausible_sheet(tiles) -> bool:
+            """A tiling is a real card sheet only if it has >= 4 tiles AND
+            the tiles don't span the whole frame. Tiles that run the full
+            image width (or height) are 1-D strips of ONE card cut along
+            its printed rules/shadows — a real sheet photo always has
+            margins/gutters, so its tiles never span the frame
+            (IMG_2525: 4 strips 2302 wide on a 2302 px image; IMG_8943:
+            5 strips at full width; IMG_2628: 7 full-height columns)."""
+            if len(tiles) < MIN_SHEET_TILES:
+                return False
+            full_span = sum(1 for t, _ in tiles if t.shape[1] >= 0.97 * W or t.shape[0] >= 0.97 * H)
+            return full_span < 0.5 * len(tiles)
+
+        if len(detected_cards) < MIN_SHEET_TILES:
             grid_cards = self._detect_grid_by_gaps(original)
-            if len(grid_cards) > len(detected_cards):
+            # Gap detection is EDGE-derived, so a result of exactly 1 is a
+            # confident "one card, here are its bounds" — on every
+            # single-card photo in the audit it returned the correct crop
+            # (IMG_2525 1944x1410, IMG_8943 2838x2102, IMG_2628 1719x999)
+            # and must win. 2-3 tiles is the crease false-split; >= 4 must
+            # pass the sheet check.
+            # Also when contours found a lone (often spurious) region: gap
+            # and contour agree it's one card, and the gap crop is the
+            # real boundary (IMG_2525: 1 contour + gap 1944x1410).
+            if len(grid_cards) == 1 and len(detected_cards) <= 1:
+                detected_cards = grid_cards
+                edge_confident_single = True
+            elif _plausible_sheet(grid_cards) and len(grid_cards) > len(detected_cards):
                 detected_cards = grid_cards
 
-        # Last resort: uniform grid split, but filter blank cells
-        if len(detected_cards) < 4:
+        # Last resort: uniform grid split, but filter blank cells. This is
+        # BLIND (no edge evidence). It legitimately recovers scanned sheets
+        # where contours under-find (Steinweg p1: 3 contours -> 8 cards),
+        # so it still runs on low counts — but it must never out-vote a
+        # confident edge-derived single card (it was chopping one card
+        # into 4-7 half-width cells).
+        if len(detected_cards) < MIN_SHEET_TILES and not edge_confident_single:
             uniform_cards = self._uniform_grid_split(original)
             # Filter cells that are mostly blank (plain white/black background)
             filtered_uniform = [
-                (cell, None) for cell, _ in uniform_cards
-                if not _is_blank_cell(cell)
+                (cell, None) for cell, _ in uniform_cards if not _is_blank_cell(cell)
             ]
-            if len(filtered_uniform) > len(detected_cards):
+            if _plausible_sheet(filtered_uniform) and len(filtered_uniform) > len(detected_cards):
                 detected_cards = filtered_uniform
 
         # If no cards found, try simpler bounding box fallback
@@ -136,10 +178,15 @@ class ImprovedCardDetector:
 
         return detected_cards
 
-    def _contours_to_cards(self, edge_image: np.ndarray, original: np.ndarray,
-                           resized: np.ndarray, ratio: float,
-                           min_area_resized: int, max_area_resized: int
-                           ) -> List[Tuple[np.ndarray, np.ndarray]]:
+    def _contours_to_cards(
+        self,
+        edge_image: np.ndarray,
+        original: np.ndarray,
+        resized: np.ndarray,
+        ratio: float,
+        min_area_resized: int,
+        max_area_resized: int,
+    ) -> List[Tuple[np.ndarray, np.ndarray]]:
         """Extract card regions from a preprocessed edge image via contour analysis."""
         contours = cv2.findContours(edge_image, cv2.RETR_LIST, cv2.CHAIN_APPROX_SIMPLE)
         contours = imutils.grab_contours(contours)
@@ -237,80 +284,80 @@ class ImprovedCardDetector:
                     cards.append((cell, None))
 
         return cards
-    
+
     def _fallback_detection(self, image: np.ndarray) -> List[Tuple[np.ndarray, None]]:
         """
         Fallback detection using thresholding.
-        
+
         Args:
             image: Original image
-            
+
         Returns:
             List of detected cards
         """
         orig_height, orig_width = image.shape[:2]
         image_area = orig_height * orig_width
-        
+
         # Calculate area thresholds
         min_area = int(image_area * (self.min_area_percent / 100))
         max_area = int(image_area * (self.max_area_percent / 100))
-        
+
         gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-        
+
         # Use Otsu's thresholding
         _, thresh = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
-        
+
         # Morphological operations
         kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (7, 7))
         thresh = cv2.morphologyEx(thresh, cv2.MORPH_CLOSE, kernel, iterations=2)
-        
+
         # Find contours
         contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         contours = sorted(contours, key=cv2.contourArea, reverse=True)
-        
+
         detected_cards = []
         used_regions = []
-        
+
         for contour in contours[:15]:
             area = cv2.contourArea(contour)
-            
+
             if area < min_area or area > max_area:
                 continue
-            
+
             x, y, w, h = cv2.boundingRect(contour)
-            
+
             # Check overlap
             overlaps = False
             for used_x, used_y, used_w, used_h in used_regions:
                 x_overlap = max(0, min(x + w, used_x + used_w) - max(x, used_x))
                 y_overlap = max(0, min(y + h, used_y + used_h) - max(y, used_y))
                 overlap_area = x_overlap * y_overlap
-                
+
                 if overlap_area > (w * h * 0.3):
                     overlaps = True
                     break
-            
+
             if overlaps:
                 continue
-            
+
             # Check aspect ratio - business card specific
             aspect_ratio = float(w) / h if h > 0 else 0
             if not (1.3 < aspect_ratio < 2.0 or 0.5 < aspect_ratio < 0.77):
                 continue
-            
+
             # Check extent (rectangularity)
             extent = area / (w * h) if (w * h) > 0 else 0
             if extent < 0.7:  # Business cards are very rectangular
                 continue
-            
-            card_image = image[y:y+h, x:x+w]
-            
+
+            card_image = image[y : y + h, x : x + w]
+
             if card_image.shape[0] > 50 and card_image.shape[1] > 50:
                 detected_cards.append((card_image, None))
                 used_regions.append((x, y, w, h))
-        
+
         return detected_cards
-    
+
     # ------------------------------------------------------------------
     # Grid detection — designed for flatbed scans of multiple cards
     # ------------------------------------------------------------------
@@ -334,12 +381,12 @@ class ImprovedCardDetector:
         h_proj = np.sum(edges, axis=1).astype(float)
         # Very small smoothing kernel (3px) — just enough to remove
         # single-pixel noise without smearing card-border spikes into gaps.
-        h_smooth = np.convolve(h_proj, np.ones(3) / 3, mode='same')
+        h_smooth = np.convolve(h_proj, np.ones(3) / 3, mode="same")
         row_splits = self._find_gap_positions(h_smooth, h, cross_length=w)
 
         # --- Vertical projection (find column separators) ---
         v_proj = np.sum(edges, axis=0).astype(float)
-        v_smooth = np.convolve(v_proj, np.ones(3) / 3, mode='same')
+        v_smooth = np.convolve(v_proj, np.ones(3) / 3, mode="same")
         col_splits = self._find_gap_positions(v_smooth, w, cross_length=h)
 
         row_bounds = [0] + row_splits + [h]
@@ -384,9 +431,9 @@ class ImprovedCardDetector:
         return cards
 
     @staticmethod
-    def _find_gap_positions(profile: np.ndarray, total_length: int,
-                            cross_length: int,
-                            min_gap_frac: float = 0.01) -> List[int]:
+    def _find_gap_positions(
+        profile: np.ndarray, total_length: int, cross_length: int, min_gap_frac: float = 0.01
+    ) -> List[int]:
         """
         Walk an edge-density profile and return the centre position of
         every low-density gap (= separator between cards).
@@ -423,8 +470,7 @@ class ImprovedCardDetector:
                 gap_size = gap_end - gap_start
                 gap_center = (gap_start + gap_end) // 2
 
-                if (gap_size >= min_gap_px
-                        and edge_margin < gap_center < total_length - edge_margin):
+                if gap_size >= min_gap_px and edge_margin < gap_center < total_length - edge_margin:
                     gaps.append(gap_center)
                 gap_start = None
 
@@ -433,71 +479,71 @@ class ImprovedCardDetector:
     def four_point_transform(self, image: np.ndarray, pts: np.ndarray) -> np.ndarray:
         """
         Apply four point perspective transform to get top-down view.
-        
+
         Args:
             image: Original image
             pts: Four corner points
-            
+
         Returns:
             Warped image
         """
         # Order the points
         rect = self.order_points(pts)
         (tl, tr, br, bl) = rect
-        
+
         # Compute width
         widthA = np.sqrt(((br[0] - bl[0]) ** 2) + ((br[1] - bl[1]) ** 2))
         widthB = np.sqrt(((tr[0] - tl[0]) ** 2) + ((tr[1] - tl[1]) ** 2))
         maxWidth = max(int(widthA), int(widthB))
-        
+
         # Compute height
         heightA = np.sqrt(((tr[0] - br[0]) ** 2) + ((tr[1] - br[1]) ** 2))
         heightB = np.sqrt(((tl[0] - bl[0]) ** 2) + ((tl[1] - bl[1]) ** 2))
         maxHeight = max(int(heightA), int(heightB))
-        
+
         # Construct destination points
-        dst = np.array([
-            [0, 0],
-            [maxWidth - 1, 0],
-            [maxWidth - 1, maxHeight - 1],
-            [0, maxHeight - 1]
-        ], dtype="float32")
-        
+        dst = np.array(
+            [[0, 0], [maxWidth - 1, 0], [maxWidth - 1, maxHeight - 1], [0, maxHeight - 1]],
+            dtype="float32",
+        )
+
         # Compute perspective transform matrix
         M = cv2.getPerspectiveTransform(rect, dst)
         warped = cv2.warpPerspective(image, M, (maxWidth, maxHeight))
-        
+
         return warped
-    
+
     def order_points(self, pts: np.ndarray) -> np.ndarray:
         """
         Order points in consistent order: top-left, top-right, bottom-right, bottom-left.
-        
+
         Args:
             pts: Array of 4 points
-            
+
         Returns:
             Ordered array
         """
         rect = np.zeros((4, 2), dtype="float32")
-        
+
         # Sum: top-left has smallest sum, bottom-right has largest
         s = pts.sum(axis=1)
         rect[0] = pts[np.argmin(s)]
         rect[2] = pts[np.argmax(s)]
-        
+
         # Diff: top-right has smallest diff, bottom-left has largest
         diff = np.diff(pts, axis=1)
         rect[1] = pts[np.argmin(diff)]
         rect[3] = pts[np.argmax(diff)]
-        
+
         return rect
 
 
 # ── Module-level helpers ────────────────────────────────────────────────────
 
-def _is_blank_cell(image: np.ndarray, std_threshold: float = 25.0,
-                   white_threshold: float = 0.92) -> bool:
+
+def _is_blank_cell(
+    image: np.ndarray, std_threshold: float = 25.0, white_threshold: float = 0.92
+) -> bool:
     """
     Return True if the cell is mostly blank — uniform white, black, or
     nearly uniform colour.  Used to filter empty cells from uniform grid
@@ -530,4 +576,3 @@ def _is_blank_cell(image: np.ndarray, std_threshold: float = 25.0,
         return True
 
     return False
-

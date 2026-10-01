@@ -120,27 +120,22 @@ class CardProcessor:
             logger.info("Running automatic card detection")
             detected_cards = self.detector.detect_cards(image_bgr)
 
-            # Grid-layout fallback: if auto-detection found very few cards
-            if len(detected_cards) < 4:
-                h_img, w_img = image_bgr.shape[:2]
-                aspect = w_img / h_img if h_img > 0 else 1.0
+            # Trust real contours. The old rule inferred a 4x2 / 2x4 grid
+            # whenever fewer than 4 contours were found — which tiled every
+            # single-card phone photo into 4-8 junk regions (audit over 95
+            # archived originals: IMG_1658 -> 8, IMG_2525 -> 4, IMG_2628 -> 7,
+            # all with identical aspects). Real multi-card sheets always
+            # yield >= 4 genuine contours, so a low count means "few cards",
+            # not "missed grid". Grid remains an explicit user mode.
+            if detected_cards:
+                logger.info(f"Detected {len(detected_cards)} cards")
+                return detected_cards
 
-                # Infer grid from aspect ratio
-                if aspect < 1.4:
-                    inferred_rows, inferred_cols = 4, 2
-                else:
-                    inferred_rows, inferred_cols = 2, 4
-
-                grid_cards = split_image_grid(image_bgr, inferred_rows, inferred_cols)
-                if len(grid_cards) > len(detected_cards):
-                    logger.info(
-                        f"Fallback to {inferred_rows}x{inferred_cols} grid layout "
-                        f"(aspect ratio: {aspect:.2f})"
-                    )
-                    return grid_cards
-
-            logger.info(f"Detected {len(detected_cards)} cards")
-            return detected_cards
+            # Zero contours: a phone photo of one card filling the frame is
+            # far likelier than an 8-card sheet with invisible edges. Treat
+            # the whole image as a single card rather than guessing a grid.
+            logger.info("No card contours found — treating whole image as one card")
+            return [(image_bgr, None)]
 
         else:
             logger.warning(f"Unknown detection mode: {detection_mode}, defaulting to Automatic")

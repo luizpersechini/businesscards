@@ -2,6 +2,24 @@
 
 All notable changes to the Business Card Scanner project will be documented in this file.
 
+## [2.1.38] — 2026-10-01
+
+### Fixed
+
+- **Single-card photos were exploded into 4–8 fake cards in Automatic mode.** An audit over 95 archived originals showed every one-card phone photo (IMG_1658 → 8, IMG_2525 → 4, IMG_2628 → 7, IMG_8943 → 5, all identical aspects) being tiled by "infer a grid when fewer than 4 contours are found" rules at **three** layers, plus a fourth path on the server. The user's reported case — 2 cards previewed as 3 with a ~20px sliver and a bogus "Apply 3×1 grid" banner — is the same bug. Fixes, one per layer:
+  - `card_processor.detect_cards`: removed the `<4 → split_image_grid` guess. Real contours are trusted; zero contours → the whole image is one card (a phone photo of one card is far likelier than an 8-card sheet with invisible edges). Grid stays an explicit user mode.
+  - `ImprovedCardDetector`: a tiling may replace contour results only if it's a plausible sheet — ≥4 tiles that **don't span the frame** (full-width/height tiles are 1-D strips of one card cut along its printed rules). Crucially, `_detect_grid_by_gaps` is _edge-derived_: when it returns exactly 1 region and contours found ≤1, that's a confident "one card, here are its bounds" (it produced the correct crop on every single-card photo) and now wins. The blind `_uniform_grid_split` still runs on low counts — it legitimately recovers scanned sheets where contours under-find (Steinweg p1: 3 → 8) — but can no longer out-vote that confident single.
+  - `server._gap_detect_and_regularize`: added a _relative_ sliver filter (drop tiles under 30% of median width/height). The old absolute 80px floor missed inter-card gutters on 4032px phone photos.
+  - `server._process_with_refinement`: a gap-inferred tiling may override the detector only when it yields ≥4 tiles; a 2–3 tile result is the classic crease/shadow false split.
+- Verified against the archive: all five single-card photos → exactly 1 region with card-like crops; every multi-card sheet unchanged (Steinweg 8/8, page_1_sample 5/5, IMG_1584 14, Comontation 6).
+
+### Known residue
+
+- Under-detection on dense sheets with vertically stacked cards (IMG_1544 7 of ~18, IMG_8706 7 of 14, YOUR_8CARD 5 of 8) — adjacent cards merge into one portrait-aspect contour. Different fix; candidate for a Jev plausibility judgment over the detection summary (count, aspects, image dims) before spending vision calls.
+- 5 new deterministic tests (`tests/test_card_detection_rules.py`, synthetic images). 372 total pass.
+
+---
+
 ## [2.1.37] — 2026-07-09
 
 ### Fixed
@@ -31,7 +49,7 @@ All notable changes to the Business Card Scanner project will be documented in t
 ### Added
 
 - **Duplicate-contact detection** ("Duplicates" button, Contacts tab). Exact-email dupes already merge on save; this catches the rest — the same person scanned twice with a different or typo'd email. Conservative by design: a pair is flagged only on **same email**, or **matching name AND (matching company OR a shared phone number)**. "Matching name" needs ≥2 shared accent-folded tokens with one name a subset of the other (so "Gilberto Costa" ~ "Gilberto Moura Costa"), which avoids first-name-only collisions. Found 2 real pairs in the live data (Fabiola Souza `.com`/`.com.br`; André/Andre Marra — accent + different emails) with zero false positives.
-  - `ContactsRepository.find_duplicates()` (union-find, so A~B~C collapse into one group) + `merge_contacts(target, sources)`. Merge is **non-destructive** on the kept record (fills only its empty fields), respects locked-field protection (a locked target's name/email are never overwritten), inherits a card image/source file if missing, then deletes the sources. Regenerates the VCF.
+  - `ContactsRepository.find_duplicates()` (union-find, so A~~B~~C collapse into one group) + `merge_contacts(target, sources)`. Merge is **non-destructive** on the kept record (fills only its empty fields), respects locked-field protection (a locked target's name/email are never overwritten), inherits a card image/source file if missing, then deletes the sources. Regenerates the VCF.
   - Endpoints: `GET /api/contacts/duplicates`, `POST /api/contacts/merge`.
   - Review modal: each group shows both records side by side (email · company · phone · added-date), a radio to pick which to keep (defaults to the older one), lock badges, and Merge / "Not duplicates" per group. **Nothing merges without a click.**
 - 20 new tests (detection evidence rules, conservative rejections, transitive grouping, merge fill/protect/delete semantics). 362 total pass. UI verified end-to-end in the preview (both real pairs render; merge intentionally not run on live data).
