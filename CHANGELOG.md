@@ -2,6 +2,20 @@
 
 All notable changes to the Business Card Scanner project will be documented in this file.
 
+## [2.1.40] — 2026-10-20
+
+### Fixed
+
+- **Japanese cards came out as `????RtMジャパン????`.** `repair_cjk_substitutions` (built for GLM-OCR sprinkling stray ideographs into Portuguese text — "Andr矇") replaced _every_ kanji in name/company/address with `?`; only kana survived. qwen had read the card correctly. The repair now fires only on the sprinkle pattern (≤2 ideographs and <25% of a field's letters); a mostly-CJK field is real text and is left intact. The prompt's "Latin only" rule is split in two: transcribe CJK cards in their printed script; never substitute CJK for accents on Latin cards.
+
+### Added
+
+- **CJK detection + translation pass (Ollama).** `detect_cjk_script()` classifies the identity fields as `ja` (kana) / `ko` (hangul) / `zh` (ideographs) and sets `_detected_lang`, so the existing language badge shows `JA`. For those cards the provider makes one extra call to the same vision model with the crop and the extracted fields, asking for a romanized name (Hepburn / pinyin / Revised Romanization), the company's English name and an English title. Latin answers replace `firstName/lastName/fullName/company/title`; the printed originals are preserved in `notes` as `原文: name · company · title`; address/city/country keep the script (postal use). Any failure, or a model that echoes CJK back, leaves the card untouched. Latin cards never pay for the second call. `OLLAMA_CJK_TRANSLATE=0` disables it.
+- **Furigana guard.** Models tend to romanize only the kana reading of the given name and split it ("きみあき" → "Kimi Aki"). When the email local part is `first.last` and the romanized name collapses to one of those parts, both names are taken from the email. Verified on the RtM Japan card: `Kimiaki Tsuden · Mitsubishi Corporation RtM Japan Co., Ltd. · Manager`, 16 s total on qwen2.5vl:7b.
+- 16 new tests (`TestCJKCards`). 389 total pass.
+
+---
+
 ## [2.1.39] — 2026-10-01
 
 ### Fixed

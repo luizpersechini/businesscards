@@ -18,7 +18,7 @@ import requests
 import numpy as np
 from typing import Optional, Dict, List
 
-from .base import VisionProvider
+from .base import VisionProvider, detect_cjk_script, _CJK_ANY_RE
 
 from ..models import ProviderType, ProviderStatus, ProviderConfig, ScanResult
 
@@ -290,6 +290,17 @@ class OllamaVisionProvider(VisionProvider):
                     logger.warning(msg)
                     print(msg)
 
+                # CJK cards (Japanese/Chinese/Korean): the fields came back in
+                # the printed script. Second pass on the same crop asks the
+                # model for Latin versions (romaji name, English company and
+                # title); originals are preserved in notes. Off with
+                # OLLAMA_CJK_TRANSLATE=0. Latin cards never pay for this.
+                script = detect_cjk_script(contact_dict)
+                if script and contact_dict:
+                    contact_dict["_detected_lang"] = script
+                    if os.environ.get("OLLAMA_CJK_TRANSLATE", "1").strip() != "0":
+                        contact_dict = self._translate_cjk_fields(image_b64, contact_dict, script)
+
                 # Optional LLM post-correction with language-aware routing.
                 # Off by default. Configure per-language model overrides:
                 #   OCR_POST_CORRECTION_MODEL_EN=qwen2.5:3b
@@ -327,6 +338,119 @@ class OllamaVisionProvider(VisionProvider):
             )
         except Exception as e:
             return self._make_scan_result(None, start_time, error=str(e))
+
+    # ── CJK translation pass ───────────────────────────────────────────────
+
+    _CJK_SCRIPT_NAMES = {"ja": "Japanese", "zh": "Chinese", "ko": "Korean"}
+    _CJK_TRANSLATE_FIELDS = ("firstName", "lastName", "fullName", "company", "title")
+
+    @classmethod
+    def _cjk_translation_schema(cls) -> Dict:
+        nullable_string = {"type": ["string", "null"]}
+        return {
+            "type": "object",
+            "additionalProperties": False,
+            "properties": {k: nullable_string for k in cls._CJK_TRANSLATE_FIELDS},
+        }
+
+    @staticmethod
+    def _cjk_original_line(contact: Dict) -> str:
+        name = contact.get("fullName") or " ".join(
+            p for p in (contact.get("lastName"), contact.get("firstName")) if p
+        )
+        parts = [p for p in (name, contact.get("company"), contact.get("title")) if p]
+        return " · ".join(parts)
+
+    @staticmethod
+    def _reconcile_name_with_email(contact: Dict) -> None:
+        """The model often romanizes only the furigana (the given-name
+        reading) and then splits it into two words — "きみあき" → "Kimi Aki"
+        while the email says kimiaki.tsuden@. When the email local part is
+        `a.b` / `a_b` and the romanized name collapses to exactly one of
+        those parts, take both names from the email (first.last order)."""
+        email = contact.get("email") or ""
+        local = email.split("@", 1)[0].lower() if "@" in email else ""
+        parts = [p for p in re.split(r"[._-]", local) if p.isalpha()]
+        if len(parts) != 2:
+            return
+        name_tokens = [
+            t for t in re.split(r"\s+", (contact.get("fullName") or "").strip()) if t
+        ] or [t for t in (contact.get("firstName"), contact.get("lastName")) if t]
+        joined = "".join(name_tokens).lower()
+        if not joined or joined == "".join(parts):
+            return
+        if joined in parts:
+            contact["firstName"] = parts[0].capitalize()
+            contact["lastName"] = parts[1].capitalize()
+            contact["fullName"] = f"{contact['firstName']} {contact['lastName']}"
+
+    def _translate_cjk_fields(self, image_b64: str, contact: Dict, script: str) -> Dict:
+        """Ask the vision model for Latin-script name/company/title of a CJK
+        card. Replaces those fields only with values that are genuinely
+        Latin; keeps the printed originals in `notes` ("原文: …"). Any
+        failure leaves the contact untouched."""
+        lang = self._CJK_SCRIPT_NAMES.get(script, "CJK")
+        extracted = {k: contact.get(k) for k in self._CJK_TRANSLATE_FIELDS if contact.get(k)}
+        email = contact.get("email")
+        romaji = "Hepburn romaji" if script == "ja" else (
+            "Revised Romanization" if script == "ko" else "Hanyu pinyin"
+        )
+        prompt = (
+            f"This business card is printed in {lang}. Fields already read from it:\n"
+            f"{json.dumps(extracted, ensure_ascii=False)}\n"
+            + (f"Email on the card: {email}\n" if email else "")
+            + "Give Latin-script versions:\n"
+            f"- firstName / lastName: the person's name in {romaji}, given name in firstName, "
+            "family name in lastName. If the card prints a romanized or English name, or the "
+            "email local part spells it, use exactly that spelling. Capitalize normally.\n"
+            "- fullName: firstName + space + lastName. On Japanese cards the family name is "
+            "printed first; small kana above or beside the name is its reading (furigana), not "
+            "an extra name.\n"
+            "- company: the company's official English name if printed on the card or well "
+            "known; otherwise a faithful romanization.\n"
+            "- title: the job title translated to English.\n"
+            "Use only Latin letters. Return null for anything you cannot determine. "
+            "Return ONLY the JSON object."
+        )
+        payload = {
+            "model": self.config.model_name,
+            "prompt": prompt,
+            "images": [image_b64],
+            "stream": False,
+            "keep_alive": -1,
+            "format": self._cjk_translation_schema(),
+            "options": {"temperature": 0.1, "top_p": 0.9, "num_predict": 256},
+        }
+        try:
+            resp = requests.post(
+                f"{self.api_url}/api/generate", json=payload, timeout=self.config.timeout
+            )
+            if resp.status_code != 200:
+                logger.warning("CJK translation pass failed: HTTP %s", resp.status_code)
+                return contact
+            latin = self.parse_json_response(resp.json().get("response", "")) or {}
+        except Exception as e:  # never let the extra pass break the scan
+            logger.warning("CJK translation pass failed: %s", e)
+            return contact
+
+        original_line = self._cjk_original_line(contact)
+        changed = False
+        for k in self._CJK_TRANSLATE_FIELDS:
+            v = latin.get(k)
+            if isinstance(v, str) and v.strip() and not _CJK_ANY_RE.search(v):
+                contact[k] = v.strip()
+                changed = True
+        if changed and (latin.get("firstName") or latin.get("lastName")) and not latin.get("fullName"):
+            contact["fullName"] = " ".join(
+                p for p in (contact.get("firstName"), contact.get("lastName")) if p
+            )
+        if changed:
+            self._reconcile_name_with_email(contact)
+        if changed and original_line:
+            prefix = f"原文: {original_line}"
+            notes = contact.get("notes")
+            contact["notes"] = f"{prefix}\n{notes}" if notes else prefix
+        return contact
 
     def warmup(self) -> bool:
         """

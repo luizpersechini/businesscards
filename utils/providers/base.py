@@ -37,6 +37,51 @@ _CJK_TO_LATIN: Dict[str, str] = {
 # Match any CJK Unified Ideograph (the block where most substitutions occur).
 # Includes the main block (4E00-9FFF) and the radicals/symbols blocks.
 _CJK_RE = re.compile(r"[　-〿㐀-䶿一-鿿豈-﫿]")
+# Wider net for script detection: ideographs + kana + hangul + fullwidth forms.
+_CJK_ANY_RE = re.compile(r"[　-〿぀-ヿ㐀-䶿一-鿿가-힯豈-﫿＀-￯]")
+_KANA_RE = re.compile(r"[぀-ヿ]")
+_HANGUL_RE = re.compile(r"[가-힯ᄀ-ᇿ]")
+_LETTER_RE = re.compile(r"[^\W\d_]")
+
+# A field is a *substitution victim* only when CJK is a sprinkle inside
+# otherwise-Latin text ("Andr矇", "S瓊o Paulo"). A field that is mostly CJK
+# is a genuinely Japanese/Chinese/Korean card and must be left intact —
+# before this gate every kanji on a Tokyo card became "?".
+_MAX_SUBST_CHARS = 2
+_MAX_SUBST_RATIO = 0.25
+
+
+def _looks_like_substitution(text: str) -> bool:
+    cjk = len(_CJK_RE.findall(text))
+    if cjk == 0:
+        return False
+    letters = len(_LETTER_RE.findall(text)) or 1
+    return cjk <= _MAX_SUBST_CHARS and cjk / letters < _MAX_SUBST_RATIO
+
+
+_SCRIPT_FIELDS = ("fullName", "firstName", "lastName", "company", "title", "address", "city")
+
+
+def detect_cjk_script(contact_dict) -> Optional[str]:
+    """Return 'ja' / 'ko' / 'zh' when the card's identity fields are printed
+    in a CJK script, else None. Kana => Japanese, hangul => Korean,
+    ideographs only => Chinese. A lone substitution-style ideograph does
+    not count."""
+    if not isinstance(contact_dict, dict):
+        return None
+    texts = [v for k, v in contact_dict.items() if k in _SCRIPT_FIELDS and isinstance(v, str)]
+    if not texts:
+        return None
+    joined = " ".join(texts)
+    if _KANA_RE.search(joined):
+        return "ja"
+    if _HANGUL_RE.search(joined):
+        return "ko"
+    with_ideographs = [t for t in texts if _CJK_RE.search(t)]
+    if with_ideographs and not all(_looks_like_substitution(t) for t in with_ideographs):
+        return "zh"
+    return None
+
 # Fields that should never contain CJK characters (Latin-context).
 _LATIN_FIELDS = {
     "firstName",
@@ -59,8 +104,9 @@ _LATIN_FIELDS = {
 
 
 def _repair_cjk_in_text(text: str) -> str:
-    """Replace CJK chars with their likely Latin original (or '?' if unknown)."""
-    if not isinstance(text, str) or not _CJK_RE.search(text):
+    """Replace CJK chars with their likely Latin original (or '?' if unknown).
+    Only fires on the sprinkle pattern -- a mostly-CJK field is real text."""
+    if not isinstance(text, str) or not _looks_like_substitution(text):
         return text
     out = []
     for ch in text:
@@ -758,7 +804,8 @@ Rules:
 - firstName + lastName OR fullName (not both)
 - Keep phone numbers exactly as printed; add country code only if shown (+55 for Brazil)
 - Keep job titles exactly as printed, in their original language (Portuguese/Spanish titles stay untranslated)
-- CRITICAL: Use ONLY Latin characters (a-z, A-Z) with proper Western European accents (é, è, ê, à, ã, â, ç, ñ, ü, ö, ô). NEVER substitute non-Latin characters (Chinese 矇/癟/瓊, Japanese, Korean, etc.) for accented Latin letters. If unsure, use the unaccented letter instead.
+- If the card is printed in Japanese, Chinese or Korean, transcribe every field exactly in that script (kanji/kana/hanzi/hangul) — do not romanize or translate
+- On Latin-script cards use ONLY Latin characters with proper Western European accents (é, è, ê, à, ã, â, ç, ñ, ü, ö, ô). NEVER substitute CJK characters (矇/癟/瓊) for accented Latin letters; if unsure, use the unaccented letter
 - Return ONLY the JSON object. No markdown, no explanation, no extra text."""
         return prompt
 

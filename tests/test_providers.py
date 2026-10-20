@@ -291,3 +291,134 @@ class TestPromptEchoStrip:
         from utils.providers.base import VisionProvider
 
         assert "Gerente=Manager" not in VisionProvider.build_extraction_prompt()
+
+
+class TestCJKCards:
+    """Japanese/Chinese/Korean cards keep their script, are detected, and get
+    a Latin translation pass. Regression: before the sprinkle gate every
+    kanji on a Tokyo card became '?' ("????RtMジャパン????")."""
+
+    JA = {
+        "firstName": "つう",
+        "lastName": "でん",
+        "fullName": "つうでん",
+        "title": "営業部長",
+        "company": "株式会社RtMジャパン",
+        "address": "〒100-7027 東京都千代田区丸の内二丁目7番2号 JPタワー27階",
+        "email": "kimiaki.tsuden@rtm.mitsubishicorp.com",
+    }
+
+    def test_japanese_fields_survive_repair(self):
+        from utils.providers.base import repair_cjk_substitutions
+
+        out = repair_cjk_substitutions(dict(self.JA))
+        assert out["company"] == "株式会社RtMジャパン"
+        assert out["address"].startswith("〒100-7027 東京都")
+        assert "?" not in out["company"]
+
+    def test_sprinkled_substitution_still_repaired(self):
+        from utils.providers.base import repair_cjk_substitutions
+
+        out = repair_cjk_substitutions({"fullName": "Andr矇 Rebou癟as", "company": "S瓊o Paulo Ltda"})
+        assert out["fullName"] == "André Rebouças"
+        assert out["company"] == "São Paulo Ltda"
+
+    @pytest.mark.parametrize(
+        "contact,expected",
+        [
+            ({"fullName": "つうでん", "company": "株式会社RtMジャパン"}, "ja"),
+            ({"fullName": "王小明", "company": "北京科技有限公司"}, "zh"),
+            ({"fullName": "김철수"}, "ko"),
+            ({"fullName": "John Smith", "company": "Acme"}, None),
+            ({"fullName": "Andr矇 Silva"}, None),  # substitution, not a CJK card
+            (None, None),
+        ],
+    )
+    def test_detect_cjk_script(self, contact, expected):
+        from utils.providers.base import detect_cjk_script
+
+        assert detect_cjk_script(contact) == expected
+
+    def _provider(self):
+        from utils.providers.ollama_provider import OllamaVisionProvider as OllamaProvider
+        from utils.models import ProviderConfig
+
+        return OllamaProvider(ProviderConfig(model_name="qwen2.5vl:7b", timeout=5))
+
+    def test_translation_pass_latinizes_and_keeps_original(self):
+        latin = {
+            "firstName": "Kimiaki",
+            "lastName": "Tsuden",
+            "fullName": None,
+            "company": "Mitsubishi Corporation RtM Japan Ltd.",
+            "title": "General Manager, Sales",
+        }
+        resp = Mock(status_code=200)
+        resp.json.return_value = {"response": json.dumps(latin, ensure_ascii=False)}
+        with patch("utils.providers.ollama_provider.requests.post", return_value=resp) as post:
+            out = self._provider()._translate_cjk_fields("b64", dict(self.JA), "ja")
+        assert post.call_count == 1
+        payload = post.call_args.kwargs["json"]
+        assert payload["images"] == ["b64"]
+        assert "Japanese" in payload["prompt"]
+        assert "kimiaki.tsuden@" in payload["prompt"]
+        assert out["fullName"] == "Kimiaki Tsuden"
+        assert out["company"] == "Mitsubishi Corporation RtM Japan Ltd."
+        assert out["title"] == "General Manager, Sales"
+        assert out["notes"].startswith("原文: つうでん · 株式会社RtMジャパン · 営業部長")
+        assert out["address"].startswith("〒100-7027")  # address keeps the script
+
+    def test_translation_pass_rejects_cjk_answers_and_failures(self):
+        # Model echoed Japanese back → fields untouched, no notes line.
+        resp = Mock(status_code=200)
+        resp.json.return_value = {"response": json.dumps({"fullName": "つうでん"}, ensure_ascii=False)}
+        with patch("utils.providers.ollama_provider.requests.post", return_value=resp):
+            out = self._provider()._translate_cjk_fields("b64", dict(self.JA), "ja")
+        assert out["fullName"] == "つうでん" and "notes" not in out
+        # HTTP failure → untouched.
+        with patch("utils.providers.ollama_provider.requests.post", return_value=Mock(status_code=500)):
+            out = self._provider()._translate_cjk_fields("b64", dict(self.JA), "ja")
+        assert out["company"] == "株式会社RtMジャパン"
+
+    def test_extract_runs_translation_only_for_cjk(self, monkeypatch):
+        """End-to-end through extract_contact: a Japanese reply triggers the
+        second call and sets _detected_lang; a Latin reply makes one call."""
+        monkeypatch.delenv("OLLAMA_CJK_TRANSLATE", raising=False)
+        img = np.full((300, 500, 3), 255, dtype=np.uint8)
+        latin = {"firstName": "Kimiaki", "lastName": "Tsuden", "company": "RtM Japan", "title": "Manager"}
+        replies = [json.dumps(self.JA, ensure_ascii=False), json.dumps(latin)]
+
+        def fake_post(url, json=None, timeout=None):
+            r = Mock(status_code=200)
+            r.json.return_value = {"response": replies.pop(0)}
+            return r
+
+        with patch("utils.providers.ollama_provider.requests.post", side_effect=fake_post) as post:
+            result = self._provider().extract_contact(img)
+        assert post.call_count == 2
+        assert result.contact.full_name == "Kimiaki Tsuden"
+        assert result.contact.company == "RtM Japan"
+        assert "原文: つうでん" in (result.contact.notes or "")
+
+        replies[:] = [json.dumps({"fullName": "John Smith", "company": "Acme", "email": "j@acme.com"})]
+        with patch("utils.providers.ollama_provider.requests.post", side_effect=fake_post) as post:
+            result = self._provider().extract_contact(img)
+        assert post.call_count == 1
+        assert result.contact.full_name == "John Smith"
+
+    @pytest.mark.parametrize(
+        "name,email,expected",
+        [
+            ("Kimi Aki", "kimiaki.tsuden@rtm.example.com", "Kimiaki Tsuden"),  # furigana only
+            ("Tsuden", "kimiaki_tsuden@example.com", "Kimiaki Tsuden"),  # family name only
+            ("Kimiaki Tsuden", "kimiaki.tsuden@example.com", "Kimiaki Tsuden"),  # already right
+            ("Taro Yamada", "info@example.com", "Taro Yamada"),  # no evidence → untouched
+            ("Taro Yamada", "kimiaki.tsuden@example.com", "Taro Yamada"),  # unrelated → untouched
+        ],
+    )
+    def test_reconcile_name_with_email(self, name, email, expected):
+        from utils.providers.ollama_provider import OllamaVisionProvider
+
+        c = {"fullName": name, "email": email}
+        OllamaVisionProvider._reconcile_name_with_email(c)
+        assert c["fullName"] == expected
