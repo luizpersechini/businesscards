@@ -880,6 +880,9 @@ Rules:
         # emitted as fullName. Moves it to title (if title was empty) and
         # blanks the name fields so a real name still gets pulled later.
         contact_dict = demote_title_misplaced_as_name(contact_dict)
+        # ContactInfo drops unknown keys, so the language hint has to ride
+        # on the ScanResult (CardProcessor re-stashes it for the UI badge).
+        detected_lang = contact_dict.pop("_detected_lang", None)
         contact = ContactInfo.from_legacy_dict(contact_dict)
         confidence = 0.9 if contact.has_minimum_data() else 0.3
 
@@ -887,6 +890,7 @@ Rules:
             contact=contact,
             confidence=confidence,
             provider_used=self.provider_type,
+            detected_lang=detected_lang,
             processing_time_ms=elapsed_ms,
             qr_data_used=qr_used,
         )

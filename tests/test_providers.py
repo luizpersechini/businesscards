@@ -396,6 +396,7 @@ class TestCJKCards:
         with patch("utils.providers.ollama_provider.requests.post", side_effect=fake_post) as post:
             result = self._provider().extract_contact(img)
         assert post.call_count == 2
+        assert result.detected_lang == "ja"
         assert result.contact.full_name == "Kimiaki Tsuden"
         assert result.contact.company == "RtM Japan"
         assert "原文: つうでん" in (result.contact.notes or "")

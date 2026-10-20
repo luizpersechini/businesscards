@@ -181,6 +181,9 @@ class ScanResult:
     # The model that ACTUALLY ran — may differ from the one requested if it
     # wasn't installed (see ProviderFactory.extract_with_fallback).
     model_used: Optional[str] = None
+    # Script/language the card was printed in when it isn't Latin
+    # ('ja' / 'zh' / 'ko'), set by the provider's CJK detection.
+    detected_lang: Optional[str] = None
     processing_time_ms: int = 0
     qr_data_used: bool = False
     source_file: Optional[str] = None

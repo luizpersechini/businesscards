@@ -243,6 +243,8 @@ class CardProcessor:
                 # it never reaches the saved contact).
                 if scan_result.model_used:
                     contact_data["_model_used"] = scan_result.model_used
+                if scan_result.detected_lang:
+                    contact_data["_detected_lang"] = scan_result.detected_lang
                 logger.info(
                     "Vision analysis successful%s (model: %s)",
                     " (QR hybrid)" if via_qr == "hybrid" else "",

@@ -313,6 +313,55 @@ class ContactsRepository:
         return None
 
     @_synchronized
+    def apply_rescan(self, contact_id: str, contact_data: Dict, vcf_content: str = "") -> Optional[Dict]:
+        """Apply a fresh extraction of the SAME card to an existing contact.
+
+        Keyed on the contact id (not the email, unlike `add_contact`) so a
+        rescan that corrects the email cannot spawn a duplicate. Unlocked:
+        the data is replaced in place (id, card_id, source preserved).
+        Locked: additive merge, disagreements reported as conflicts.
+
+        Returns {status, additions, conflicts, locked} or None if no
+        contact matches.
+        """
+        for c in self._contacts:
+            if c.get("id") != contact_id:
+                continue
+            if c.get("locked", False):
+                result = self._merge_or_conflict(c.get("contact_data") or {}, contact_data)
+                if result["additions"]:
+                    cd = c.setdefault("contact_data", {})
+                    cd.update(result["additions"])
+                    try:
+                        from utils.vcf_generator import VCFGenerator
+
+                        c["vcf_content"] = VCFGenerator().generate_vcf_string(cd)
+                    except Exception:
+                        pass
+                    c["updated_at"] = datetime.now().isoformat()
+                    self._save()
+                return {
+                    "status": "conflict" if result["conflicts"] else "merged",
+                    "additions": result["additions"],
+                    "conflicts": result["conflicts"],
+                    "locked": True,
+                }
+            c["contact_data"] = dict(contact_data)
+            if vcf_content:
+                c["vcf_content"] = vcf_content
+            else:
+                try:
+                    from utils.vcf_generator import VCFGenerator
+
+                    c["vcf_content"] = VCFGenerator().generate_vcf_string(c["contact_data"])
+                except Exception:
+                    pass
+            c["updated_at"] = datetime.now().isoformat()
+            self._save()
+            return {"status": "updated", "additions": {}, "conflicts": [], "locked": False}
+        return None
+
+    @_synchronized
     def set_locked(self, contact_id: str, locked: bool) -> bool:
         """Toggle the lock flag on a contact. Returns True on success."""
         for c in self._contacts:

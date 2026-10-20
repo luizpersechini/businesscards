@@ -2,6 +2,20 @@
 
 All notable changes to the Business Card Scanner project will be documented in this file.
 
+## [2.1.41] — 2026-10-20
+
+### Added
+
+- **Rescan a contact from the Contacts tab.** Each row with a stored card crop gets a "Rescan" button next to Lock. It re-runs QR + vision on that crop (`POST /api/contacts/{id}/rescan`, body `{model}` — the model selected in the Scanner tab, now persisted in `localStorage.bcs_model`) and refreshes the contact in place. Unlocked contacts are replaced (same id, card_id, source; VCF regenerated); locked ones get the additive merge with conflicts flagged, name/email protected as always. New `ContactsRepository.apply_rescan` is keyed on the contact id rather than the email, so a rescan that corrects the email cannot spawn a duplicate. The row shows `updated · qwen2.5vl:7b · 18s` (or `N conflict(s) flagged`) for a few seconds. Verified on the RtM Japan contact.
+
+### Fixed
+
+- **Language badge never showed.** `_detected_lang` was set on the raw dict but `ContactInfo.from_legacy_dict` drops unknown keys, so it never reached the server. It now rides on `ScanResult.detected_lang` and CardProcessor re-stashes it, same as `_model_used`.
+- **Notes were invisible.** Neither API mapper (`_contact_data_to_frontend`, `_contact_to_api`) emitted `notes`, so the `原文: …` line from the CJK pass (and any other note) never reached the UI. Both now include `notes` (and `_contact_to_api` also `mobile`); the expanded contact row shows a Notes line.
+- 7 new tests (endpoint + repository). 396 total pass.
+
+---
+
 ## [2.1.40] — 2026-10-20
 
 ### Fixed

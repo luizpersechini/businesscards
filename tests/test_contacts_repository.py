@@ -5,6 +5,7 @@ Run with: python3 -m pytest tests/test_contacts_repository.py -v
 """
 
 import json
+import os
 import tempfile
 import unittest
 from pathlib import Path
@@ -573,3 +574,56 @@ class TestDuplicateDetection(unittest.TestCase):
 
     def test_merge_missing_target_returns_none(self):
         self.assertIsNone(self.repo.merge_contacts("nope", ["also-nope"]))
+
+
+class TestApplyRescan(unittest.TestCase):
+    """apply_rescan is keyed on the contact id, not the email, so a rescan
+    that corrects the email cannot spawn a duplicate."""
+
+    def setUp(self):
+        import tempfile
+
+        self.tmp = tempfile.TemporaryDirectory()
+        self.repo = ContactsRepository(repo_path=os.path.join(self.tmp.name, "c.json"))
+        self.cid = self.repo.add_contact(
+            {"fullName": "きみあき", "company": "????RtMジャパン????", "email": "old@x.jp"},
+            card_id="card-1",
+        )["id"]
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def _get(self):
+        return next(c for c in self.repo.get_all() if c["id"] == self.cid)
+
+    def test_unlocked_replaced_in_place_even_when_email_changes(self):
+        res = self.repo.apply_rescan(
+            self.cid, {"fullName": "Kimiaki Tsuden", "company": "RtM Japan", "email": "new@x.jp"}
+        )
+        self.assertEqual(res["status"], "updated")
+        self.assertEqual(len(self.repo.get_all()), 1)
+        c = self._get()
+        self.assertEqual(c["contact_data"]["fullName"], "Kimiaki Tsuden")
+        self.assertEqual(c["contact_data"]["email"], "new@x.jp")
+        self.assertNotIn("????", c["contact_data"].get("company", ""))
+        self.assertEqual(c["card_id"], "card-1")
+        self.assertIn("Kimiaki Tsuden", c["vcf_content"])
+
+    def test_locked_merges_additively_and_flags_conflicts(self):
+        self.repo.set_locked(self.cid, True)
+        res = self.repo.apply_rescan(
+            self.cid,
+            {"fullName": "Kimiaki Tsuden", "title": "Manager", "company": "RtM Japan", "email": "old@x.jp"},
+        )
+        self.assertEqual(res["status"], "conflict")
+        self.assertEqual(res["additions"], {"title": "Manager"})
+        # company differs → conflict; name is a protected field on locked
+        # contacts → silently dropped, never a conflict.
+        self.assertEqual([x["field"] for x in res["conflicts"]], ["company"])
+        c = self._get()
+        self.assertEqual(c["contact_data"]["fullName"], "きみあき")
+        self.assertEqual(c["contact_data"]["company"], "????RtMジャパン????")
+        self.assertEqual(c["contact_data"]["title"], "Manager")
+
+    def test_unknown_id_returns_none(self):
+        self.assertIsNone(self.repo.apply_rescan("nope", {"fullName": "X"}))

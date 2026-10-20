@@ -19,7 +19,7 @@ from typing import List, Optional, Tuple
 import cv2
 import numpy as np
 import requests as _requests
-from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
+from fastapi import Body, FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from PIL import Image
@@ -479,6 +479,7 @@ def _contact_data_to_frontend(
             "website": cd.get("website", ""),
             "linkedin": cd.get("linkedin", ""),
             "address": cd.get("address", ""),
+            "notes": cd.get("notes", "") or "",
         },
         "vcfContent": card.get("vcf_content", ""),
     }
@@ -1636,9 +1637,11 @@ def _contact_to_api(entry: dict) -> dict:
             "company": cd.get("company", ""),
             "email": cd.get("email", ""),
             "phone": cd.get("phone", ""),
+            "mobile": cd.get("mobile", "") or "",
             "website": cd.get("website", ""),
             "linkedin": cd.get("linkedin", ""),
             "address": cd.get("address", ""),
+            "notes": cd.get("notes", "") or "",
         },
     }
 
@@ -1749,6 +1752,63 @@ async def set_contact_lock(contact_id: str, payload: dict):
     if not updated:
         raise HTTPException(status_code=404, detail="Contact not found after update")
     return {"ok": True, "contact": _contact_to_api(updated)}
+
+
+@app.post("/api/contacts/{contact_id}/rescan")
+async def rescan_contact(contact_id: str, payload: dict = Body(default={})):
+    """Re-run QR + vision on the contact's stored card crop and refresh it.
+
+    Body: {"model": "qwen2.5vl:7b", "timeout": 300}. Unlocked contacts are
+    replaced in place (same id/card_id/source); locked ones get an additive
+    merge with conflicts flagged — the same semantics as scanning the card
+    again from the Scanner tab, minus the risk of a duplicate when the
+    email changes (keyed on the contact id, not the email).
+    """
+    model = (payload.get("model") or "qwen2.5vl:7b").strip()
+    timeout = max(10, min(int(payload.get("timeout") or 300), 600))
+
+    entry = next((c for c in _contacts.get_all() if c.get("id") == contact_id), None)
+    if not entry:
+        raise HTTPException(status_code=404, detail="Contact not found")
+    card_id = (entry.get("card_id") or "").strip()
+    thumb_path = os.path.join(THUMBNAIL_DIR, f"{card_id}.jpg") if card_id else ""
+    if not card_id or not os.path.exists(thumb_path):
+        raise HTTPException(status_code=404, detail="No stored card image for this contact")
+    img = cv2.imread(thumb_path)
+    if img is None or img.size == 0:
+        raise HTTPException(status_code=500, detail="Stored card image is unreadable")
+
+    processor = CardProcessor(provider_factory=_provider_factory)
+    loop = asyncio.get_event_loop()
+    card = await loop.run_in_executor(
+        None,
+        lambda: processor.process_single_card(img, None, vision_model=model, vision_timeout=timeout),
+    )
+    if not card or not card.get("contact_data"):
+        raise HTTPException(status_code=422, detail="Rescan extracted no usable contact data")
+
+    cd = dict(card["contact_data"])
+    # Transport-only stashes never belong in the stored contact.
+    model_used = cd.pop("_model_used", None) or model
+    detected_lang = cd.pop("_detected_lang", None)
+    cd.pop("_qr_url", None)
+    cd = {k: v for k, v in cd.items() if not str(k).startswith("_")}
+
+    result = _contacts.apply_rescan(contact_id, cd, card.get("vcf_content", ""))
+    if not result:
+        raise HTTPException(status_code=404, detail="Contact not found")
+    updated = next((c for c in _contacts.get_all() if c.get("id") == contact_id), None)
+    return {
+        "ok": True,
+        "status": result["status"],
+        "additions": result.get("additions", {}),
+        "conflicts": result.get("conflicts", []),
+        "modelUsed": model_used,
+        "detectedLang": detected_lang,
+        "viaQr": bool(card.get("via_qr")),
+        "time": round(float(card.get("processing_time") or 0.0), 1),
+        "contact": _contact_to_api(updated) if updated else None,
+    }
 
 
 @app.post("/api/contacts/{contact_id}/resolve")
@@ -1902,7 +1962,6 @@ async def export_contacts_csv():
 # repository exports so the user can export *this run's* output without
 # committing it to the persistent repo.
 
-from fastapi import Body
 from pydantic import BaseModel as _BaseModel
 
 

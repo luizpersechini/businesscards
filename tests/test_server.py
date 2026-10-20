@@ -280,3 +280,111 @@ def test_consolidate_noop_without_qr_url():
     b = {"contact_data": {"company": "Acme", "phone": "+1"}}
     out = server._consolidate_qr_only_cards([a, b])
     assert len(out) == 2
+
+
+# ── POST /api/contacts/{id}/rescan ──────────────────────────────────────────
+
+
+def _rescan_setup(client, monkeypatch, tmp_path, locked=False, card=None):
+    """Point THUMBNAIL_DIR at tmp, store a crop for contact c1, and replace
+    CardProcessor with a fake whose process_single_card returns `card`."""
+    import cv2
+    import numpy as np
+
+    thumb_dir = tmp_path / "thumbs"
+    thumb_dir.mkdir()
+    cv2.imwrite(str(thumb_dir / "card-abc.jpg"), np.full((40, 60, 3), 255, dtype=np.uint8))
+    monkeypatch.setattr(server, "THUMBNAIL_DIR", str(thumb_dir))
+
+    entry = {
+        "id": "c1",
+        "card_id": "card-abc",
+        "locked": locked,
+        "contact_data": {"fullName": "きみあき", "company": "????RtMジャパン????", "email": "k@x.jp"},
+        "added_at": "2026-10-20T10:00:00",
+    }
+    server._contacts.get_all.return_value = [entry]
+    rescan_result = {
+        "status": "conflict" if locked else "updated",
+        "additions": {"title": "Manager"} if locked else {},
+        "conflicts": [{"field": "fullName", "existing": "きみあき", "incoming": "Kimiaki Tsuden"}] if locked else [],
+        "locked": locked,
+    }
+
+    def _apply(cid, cd, vcf=""):
+        # Mimic the real repository: an unlocked rescan replaces the data.
+        if not locked:
+            entry["contact_data"] = dict(cd)
+        return rescan_result
+
+    server._contacts.apply_rescan.side_effect = _apply
+
+    calls = {}
+
+    class FakeProcessor:
+        def __init__(self, provider_factory=None):
+            pass
+
+        def process_single_card(self, img, rgb=None, vision_model=None, vision_timeout=None):
+            calls["model"] = vision_model
+            calls["shape"] = img.shape
+            return card
+
+    monkeypatch.setattr(server, "CardProcessor", FakeProcessor)
+    return calls
+
+
+def test_rescan_unlocked_replaces_data_and_strips_stashes(client, monkeypatch, tmp_path):
+    card = {
+        "contact_data": {
+            "fullName": "Kimiaki Tsuden",
+            "company": "Mitsubishi Corporation RtM Japan",
+            "email": "k@x.jp",
+            "notes": "原文: きみあき",
+            "_model_used": "qwen2.5vl:7b",
+            "_detected_lang": "ja",
+            "_qr_url": "https://x",
+        },
+        "vcf_content": "BEGIN:VCARD\nEND:VCARD\n",
+        "via_qr": False,
+        "processing_time": 16.04,
+    }
+    calls = _rescan_setup(client, monkeypatch, tmp_path, card=card)
+    r = client.post("/api/contacts/c1/rescan", json={"model": "qwen2.5vl:7b"})
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["status"] == "updated"
+    assert body["modelUsed"] == "qwen2.5vl:7b"
+    assert body["detectedLang"] == "ja"
+    assert body["time"] == 16.0
+    assert calls["model"] == "qwen2.5vl:7b"
+    assert calls["shape"] == (40, 60, 3)
+    assert body["contact"]["contact"]["notes"] == "原文: きみあき"  # notes reach the UI
+    stored = server._contacts.apply_rescan.call_args.args[1]
+    assert stored["fullName"] == "Kimiaki Tsuden"
+    assert not any(k.startswith("_") for k in stored)  # stashes never persisted
+    assert server._contacts.apply_rescan.call_args.args[0] == "c1"
+
+
+def test_rescan_locked_reports_conflicts(client, monkeypatch, tmp_path):
+    card = {"contact_data": {"fullName": "Kimiaki Tsuden", "title": "Manager", "email": "k@x.jp"}}
+    _rescan_setup(client, monkeypatch, tmp_path, locked=True, card=card)
+    body = client.post("/api/contacts/c1/rescan", json={}).json()
+    assert body["status"] == "conflict"
+    assert body["additions"] == {"title": "Manager"}
+    assert body["conflicts"][0]["field"] == "fullName"
+
+
+def test_rescan_without_stored_crop_is_404(client, monkeypatch, tmp_path):
+    _rescan_setup(client, monkeypatch, tmp_path, card={"contact_data": {"fullName": "X"}})
+    server._contacts.get_all.return_value[0]["card_id"] = "missing"
+    r = client.post("/api/contacts/c1/rescan", json={})
+    assert r.status_code == 404
+    r = client.post("/api/contacts/nope/rescan", json={})
+    assert r.status_code == 404
+
+
+def test_rescan_with_no_extraction_is_422(client, monkeypatch, tmp_path):
+    _rescan_setup(client, monkeypatch, tmp_path, card=None)
+    r = client.post("/api/contacts/c1/rescan", json={})
+    assert r.status_code == 422

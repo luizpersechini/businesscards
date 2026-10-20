@@ -4143,13 +4143,25 @@
       function ScannerTab({ tweaks, densityPad, onEditCard }) {
         const [files, setFiles] = useState([]);
         const [config, setConfig] = useState({
-          model: "qwen2.5vl:7b",
+          model:
+            (() => {
+              try {
+                return localStorage.getItem("bcs_model") || "qwen2.5vl:7b";
+              } catch (e) {
+                return "qwen2.5vl:7b";
+              }
+            })(),
           mode: "auto",
           rows: 4,
           cols: 2,
           timeout: 300,
           deskew: false,
         });
+        useEffect(() => {
+          try {
+            localStorage.setItem("bcs_model", config.model);
+          } catch (e) {}
+        }, [config.model]);
         const [phase, setPhase] = useState("idle"); // idle | preview | processing | results
         const [stage, setStage] = useState("warmup");
         const [progress, setProgress] = useState(0);
@@ -5757,9 +5769,37 @@
         onDelete,
         onEdit,
         onToggleLock,
+        onRescan,
         expanded,
         onToggleExpand,
       }) {
+        const [rescanState, setRescanState] = useState(null); // null | "running" | {msg, ok}
+        const handleRescanClick = async (e) => {
+          e.stopPropagation();
+          e.preventDefault();
+          if (!onRescan || rescanState === "running") return;
+          setRescanState("running");
+          try {
+            const r = await onRescan();
+            const bits = [];
+            if (r.status === "updated") bits.push("updated");
+            else if (r.status === "merged")
+              bits.push(
+                Object.keys(r.additions || {}).length
+                  ? "merged " + Object.keys(r.additions).length + " new field(s)"
+                  : "no new fields",
+              );
+            else if (r.status === "conflict")
+              bits.push((r.conflicts || []).length + " conflict(s) flagged");
+            if (r.modelUsed) bits.push((r.viaQr ? "QR + " : "") + r.modelUsed);
+            if (r.detectedLang) bits.push(r.detectedLang.toUpperCase());
+            if (r.time) bits.push(r.time + "s");
+            setRescanState({ ok: true, msg: bits.join(" · ") });
+          } catch (err) {
+            setRescanState({ ok: false, msg: "Rescan failed: " + err.message });
+          }
+          setTimeout(() => setRescanState(null), 8000);
+        };
         const initials = (c.contact.fullName || "?")
           .split(" ")
           .slice(0, 2)
@@ -5971,6 +6011,48 @@
                     <Icons.edit color="currentColor" />
                   </button>
                 )}
+                {rescanState && rescanState !== "running" && (
+                  <span
+                    style={{
+                      fontSize: 11,
+                      color: rescanState.ok ? "var(--text-secondary)" : "var(--danger)",
+                      marginRight: 4,
+                    }}
+                  >
+                    {rescanState.msg}
+                  </span>
+                )}
+                {onRescan && c.thumbnail && (
+                  <button
+                    onClick={handleRescanClick}
+                    disabled={rescanState === "running"}
+                    title={
+                      c.locked
+                        ? "Re-run vision on the stored card image. Locked: only new fields are merged, conflicts are flagged."
+                        : "Re-run vision on the stored card image with the model selected in the Scanner tab. Replaces this contact's data."
+                    }
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      gap: 5,
+                      padding: "4px 8px",
+                      border: "1px solid var(--border)",
+                      borderRadius: 5,
+                      cursor: rescanState === "running" ? "wait" : "pointer",
+                      background: "var(--bg)",
+                      color: "var(--text-secondary)",
+                      fontSize: 11,
+                      fontWeight: 500,
+                      fontFamily: "inherit",
+                      opacity: rescanState === "running" ? 0.7 : 1,
+                    }}
+                    onMouseEnter={(e) => (e.currentTarget.style.borderColor = "var(--accent)")}
+                    onMouseLeave={(e) => (e.currentTarget.style.borderColor = "var(--border)")}
+                  >
+                    <Icons.refresh color="currentColor" width={11} height={11} />
+                    {rescanState === "running" ? "Rescanning…" : "Rescan"}
+                  </button>
+                )}
                 {onToggleLock && (
                   <button
                     onClick={(e) => {
@@ -6103,6 +6185,13 @@
                       value={c.contact.address}
                     />
                   )}
+                  {c.contact.notes && (
+                    <Detail
+                      icon={Icons.edit}
+                      label="Notes"
+                      value={c.contact.notes}
+                    />
+                  )}
                   <Detail icon={Icons.card} label="Source" value={c.source} />
                 </div>
                 <div
@@ -6157,6 +6246,7 @@
         onDelete,
         onEdit,
         onToggleLock,
+        onRescan,
         expandedId,
         onToggleExpand,
         isOpen,
@@ -6274,6 +6364,7 @@
                     onToggleLock={
                       onToggleLock ? () => onToggleLock(c) : undefined
                     }
+                    onRescan={onRescan ? () => onRescan(c) : undefined}
                     expanded={expandedId === c.id}
                     onToggleExpand={() => onToggleExpand(c.id)}
                   />
@@ -7115,6 +7206,24 @@
         const handleToggleExpand = (id) =>
           setExpandedId((prev) => (prev === id ? null : id));
 
+        // Re-run QR + vision on the contact's stored card crop. Uses the
+        // model chosen in the Scanner tab (persisted in localStorage).
+        const handleRescan = async (contactRow) => {
+          let model = "qwen2.5vl:7b";
+          try {
+            model = localStorage.getItem("bcs_model") || model;
+          } catch (e) {}
+          const r = await fetch("/api/contacts/" + contactRow.id + "/rescan", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ model }),
+          });
+          const data = await r.json().catch(() => ({}));
+          if (!r.ok) throw new Error(data.detail || "HTTP " + r.status);
+          reloadContacts();
+          return data;
+        };
+
         // Toggle the persistent lock flag on a repo contact.
         // Optimistic UI: flip locally first, then PUT to backend.
         // If backend rejects, roll back the local state.
@@ -7546,6 +7655,7 @@
                     onDelete={handleDelete}
                     onEdit={handleEdit}
                     onToggleLock={handleToggleLock}
+                    onRescan={handleRescan}
                     expandedId={expandedId}
                     onToggleExpand={handleToggleExpand}
                     isOpen={
@@ -7567,6 +7677,7 @@
                       onDelete={() => handleDelete(c.id)}
                       onEdit={() => handleEdit(c)}
                       onToggleLock={() => handleToggleLock(c)}
+                      onRescan={() => handleRescan(c)}
                       expanded={expandedId === c.id}
                       onToggleExpand={() => handleToggleExpand(c.id)}
                     />

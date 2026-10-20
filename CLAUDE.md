@@ -18,7 +18,7 @@ bash setup.sh                # first-time setup (creates .venv, installs from re
 ## Test
 
 ```
-.venv/bin/python -m pytest   # 389 tests (see pyproject.toml for config)
+.venv/bin/python -m pytest   # 396 tests (see pyproject.toml for config)
 pytest --cov=utils           # with coverage report → htmlcov/
 ```
 
@@ -32,7 +32,7 @@ pytest --cov=utils           # with coverage report → htmlcov/
 - `utils/qr_reader.py` — zxing-cpp primary + OpenCV fallback (pyzbar disabled)
 - `utils/qr_url_resolver.py` — safe fetch+parse of QR-linked contact pages (SSRF-guarded)
 - `utils/model_benchmark.py` — score models vs locked contacts; field-match logic + company aliases
-- `utils/contacts_repository.py` — atomic JSON store, locked-field protection, dedup/merge
+- `utils/contacts_repository.py` — atomic JSON store, locked-field protection, dedup/merge, `apply_rescan` (id-keyed refresh from the stored crop)
 - `utils/providers/base.py` — extraction prompt + post-processing repairs (CJK sprinkle repair, `detect_cjk_script`, field-permutation, echo strip, title demotion)
 - `utils/` — other vision providers, image processing, export logic, FastAPI helpers
 - `tests/` — pytest test suite
@@ -50,6 +50,7 @@ Model routing (two gotchas, both previously caused silent bugs):
 - The requested model is applied to the provider config in `extract_with_fallback(model=...)` **AFTER** the availability check, because Ollama's `check_availability()` rewrites `model_name` to whatever is loaded in memory. Without this the UI's model choice is silently ignored.
 - …but only **if that model is installed** (`_model_is_installed`, tag-tolerant). Forcing a missing tag makes Ollama 404 and the whole scan returns **zero cards**. When it's missing we keep the installed model `check_availability()` picked and log the substitution + the `ollama pull` command.
 - CJK cards (ja/zh/ko): `detect_cjk_script` keeps the printed script intact (the `?`-repair only fires on the ≤2-ideograph sprinkle pattern) and the Ollama provider runs one extra translation call; Latin goes into name/company/title, the original line into `notes` as `原文: …`. `OLLAMA_CJK_TRANSLATE=0` disables.
+- `ScanResult.detected_lang` (ja/zh/ko) and `model_used` both travel to the UI as `_`-prefixed stashes on `contact_data`; anything `_`-prefixed is transport-only and must be popped before persisting (the rescan endpoint strips them all).
 - `ScanResult.model_used` records the model that **actually** ran (post-fallback). It reaches the UI badge via a `_model_used` stash on `contact_data`, popped in `server._contact_data_to_frontend` — same pattern as `_qr_url` / `_detected_lang`, so it never lands in the saved contact.
 
 ## Don't touch
