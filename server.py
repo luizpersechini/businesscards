@@ -1324,7 +1324,13 @@ def _annotate_image(
             cv2.rectangle(annotated, (x, y), (x + bw, y + bh), GREEN, thickness)
             cx, cy = x + 40, y + 60
         else:
-            cv2.drawContours(annotated, [data], -1, GREEN, thickness)
+            # Simplify the raw contour (ragged spurs along shadows) to its
+            # 4-8 corner polygon — same approximation the detector accepted.
+            peri = cv2.arcLength(data, True)
+            approx = cv2.approxPolyDP(data, 0.02 * peri, True)
+            if len(approx) < 4:
+                approx = data
+            cv2.drawContours(annotated, [approx], -1, GREEN, thickness)
             M = cv2.moments(data)
             if M["m00"] > 0:
                 cx = int(M["m10"] / M["m00"]) - 20

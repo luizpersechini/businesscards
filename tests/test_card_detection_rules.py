@@ -109,3 +109,19 @@ class TestOverlayPath:
         _jpg, count, _lines, inferred_grid = server._annotate_image(img, "auto", 2, 2)
         assert count == 2
         assert inferred_grid is None  # 1-3 regions never trigger the banner
+
+
+class TestContoursInOriginalCoordinates:
+    def test_sheet_contours_span_full_resolution_frame(self, detector):
+        """Contours used to come back in the 500px-high working frame, so the
+        preview drew 7 correct cards as 7 tiny boxes in the top-left corner."""
+        import cv2
+
+        img = _sheet_2x4()  # 2200 x 1700
+        regions = detector.detect_cards(img)
+        polys = [c for _, c in regions if c is not None]
+        assert len(polys) == 8
+        xs = [cv2.boundingRect(c)[0] + cv2.boundingRect(c)[2] for c in polys]
+        ys = [cv2.boundingRect(c)[1] + cv2.boundingRect(c)[3] for c in polys]
+        assert max(xs) > 1500 and max(ys) > 1900  # bottom-right card lands where drawn
+        assert min(cv2.boundingRect(c)[0] for c in polys) >= 90  # left column near x=100

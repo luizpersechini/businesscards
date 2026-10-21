@@ -2,6 +2,14 @@
 
 All notable changes to the Business Card Scanner project will be documented in this file.
 
+## [2.1.42] — 2026-10-21
+
+### Fixed
+
+- **Auto-detect preview drew every card as a tiny box in the top-left corner.** `ImprovedCardDetector` finds contours on a 500px-high working copy and crops the card at full resolution — but returned the contour in the small frame. The scan was right all along (crops are full-res); only the overlay was wrong: "Detected 7 cards" with seven 1-cm boxes stacked at the origin. Contours now come back scaled to original coordinates. The preview also draws the detector's simplified 4–8 corner polygon instead of the raw ragged contour. Verified on an 8-card phone photo (8/8 outlined in place); regression test added. 397 tests pass.
+
+---
+
 ## [2.1.41] — 2026-10-20
 
 ### Added

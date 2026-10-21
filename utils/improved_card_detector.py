@@ -244,7 +244,11 @@ class ImprovedCardDetector:
                 card_warped = original[y1:y2, x1:x2]
 
             if card_warped is not None and card_warped.shape[0] > 80 and card_warped.shape[1] > 80:
-                cards.append((card_warped, c))
+                # Contours were found on the 500px-high working copy; return
+                # them in ORIGINAL image coordinates so overlays (preview)
+                # line up with the full-resolution crop.
+                c_orig = np.rint(c.astype(np.float32) * ratio).astype(np.int32)
+                cards.append((card_warped, c_orig))
                 used_regions.append((x, y, w, h))
 
         return cards
