@@ -125,3 +125,35 @@ class TestContoursInOriginalCoordinates:
         ys = [cv2.boundingRect(c)[1] + cv2.boundingRect(c)[3] for c in polys]
         assert max(xs) > 1500 and max(ys) > 1900  # bottom-right card lands where drawn
         assert min(cv2.boundingRect(c)[0] for c in polys) >= 90  # left column near x=100
+
+
+class TestBrightCardsOnDarkDesk:
+    """IMG_4507: two white cards on a dark textured desk with glare. Every
+    edge strategy found 2 contours, but the blind uniform split out-voted
+    them into 8 tiles (6 blank). The bright-blob strategy is confident and
+    now blocks that split."""
+
+    @staticmethod
+    def _photo():
+        rng = np.random.default_rng(7)
+        # Dark speckled desk (texture defeats Canny) ...
+        img = rng.integers(25, 75, size=(2000, 1200, 3), dtype=np.uint8)
+        # ... with a soft glare band (mid-grey) running across the middle.
+        yy = np.arange(2000)[:, None]
+        glare = (140 * np.exp(-((yy - 1000) / 220.0) ** 2)).astype(np.uint8)
+        img = np.clip(img.astype(np.int32) + glare[:, :, None], 0, 255).astype(np.uint8)
+        import cv2
+
+        for y in (250, 1150):
+            img[y : y + 560, 150:1050] = 245
+            cv2.putText(img, "Name Surname", (230, y + 120), cv2.FONT_HERSHEY_SIMPLEX, 2.2, (40, 40, 40), 5)
+            cv2.putText(img, "OLDENDORFF", (230, y + 460), cv2.FONT_HERSHEY_SIMPLEX, 3, (40, 40, 40), 8)
+        return img
+
+    def test_two_cards_not_split_into_eight(self, detector):
+        regions = detector.detect_cards(self._photo())
+        assert len(regions) == 2
+        assert all(c is not None for _, c in regions)
+        for crop, _ in regions:
+            h, w = crop.shape[:2]
+            assert 1.3 < w / h < 1.9  # whole card, not a tile

@@ -108,6 +108,27 @@ class ImprovedCardDetector:
             if len(cards) > len(best_cards):
                 best_cards = cards
 
+        # Strategy E: bright blobs. Light cards on a dark desk/table — the
+        # commonest phone-photo setup — defeat every edge strategy above
+        # (the desk texture drowns Canny; CLAHE amplifies it) yet are a
+        # trivial brightness threshold: each card is one bright blob. On
+        # a white scan the mask is one page-sized blob that fails the
+        # max-area gate, so this never competes there. (IMG_4507: 0 edge
+        # contours -> blind 4x2 split with 6 blank tiles; this finds 2/2.)
+        blob_cards = self._bright_blob_cards(
+            resized, original, ratio, min_area_resized, max_area_resized
+        )
+        # A filled bright blob with card aspect IS the card — unlike edge
+        # contours it can't be a crease or a printed rule — so a blob
+        # result is confident and the blind uniform split must not
+        # out-vote it (it was turning IMG_4507's 2 cards into 8 tiles).
+        blob_confident = False
+        if blob_cards and len(blob_cards) >= len(best_cards):
+            # Ties go to the blobs: their crops are the whole card, where
+            # an edge contour may stop at a printed rule or shadow.
+            best_cards = blob_cards
+            blob_confident = True
+
         detected_cards = best_cards
 
         # ── Fallbacks ──────────────────────────────────────────────────────
@@ -159,7 +180,11 @@ class ImprovedCardDetector:
         # so it still runs on low counts — but it must never out-vote a
         # confident edge-derived single card (it was chopping one card
         # into 4-7 half-width cells).
-        if len(detected_cards) < MIN_SHEET_TILES and not edge_confident_single:
+        if (
+            len(detected_cards) < MIN_SHEET_TILES
+            and not edge_confident_single
+            and not blob_confident
+        ):
             uniform_cards = self._uniform_grid_split(original)
             # Filter cells that are mostly blank (plain white/black background)
             filtered_uniform = [
@@ -177,6 +202,45 @@ class ImprovedCardDetector:
             detected_cards.append((original, None))
 
         return detected_cards
+
+    def _bright_blob_cards(
+        self,
+        resized: np.ndarray,
+        original: np.ndarray,
+        ratio: float,
+        min_area_resized: int,
+        max_area_resized: int,
+    ) -> List[Tuple[np.ndarray, np.ndarray]]:
+        """Light cards on a dark background as filled blobs (see Strategy E)."""
+        gray = cv2.cvtColor(resized, cv2.COLOR_BGR2GRAY)
+        blurred = cv2.GaussianBlur(gray, (5, 5), 0)
+        # Only meaningful when the background is darker than the cards:
+        # require a genuinely bimodal frame (Otsu threshold not near white).
+        thresh_val, mask = cv2.threshold(blurred, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+        if thresh_val > 200 or mask.mean() > 0.6 * 255:
+            return []
+        # Desk glare sits between the dark desk and the white card, and a
+        # single Otsu cut lumps it with the cards (IMG_4507: blobs grew
+        # into tall glare-shaped lumps). A second Otsu over the bright
+        # class alone separates "lit desk" from "paper" when they're
+        # distinct; use it only when it moves the cut meaningfully.
+        bright = blurred[blurred > thresh_val]
+        if bright.size > 100:
+            t2, _ = cv2.threshold(
+                bright.reshape(-1, 1), 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU
+            )
+            if t2 - thresh_val > 25:
+                _, mask = cv2.threshold(blurred, t2, 255, cv2.THRESH_BINARY)
+        kernel_open = cv2.getStructuringElement(cv2.MORPH_RECT, (7, 7))
+        kernel_small = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
+        # Open: erase desk texture speckle. Close: fill printed text holes.
+        mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel_open, iterations=1)
+        mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel_open, iterations=2)
+        # Slight erosion separates cards that touch along an edge.
+        mask = cv2.erode(mask, kernel_small, iterations=1)
+        return self._contours_to_cards(
+            mask, original, resized, ratio, min_area_resized, max_area_resized
+        )
 
     def _contours_to_cards(
         self,

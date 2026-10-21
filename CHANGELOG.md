@@ -2,6 +2,18 @@
 
 All notable changes to the Business Card Scanner project will be documented in this file.
 
+## [2.1.44] — 2026-10-21
+
+### Fixed
+
+- **Two white cards on a dark desk became 8 tiles (6 blank).** IMG_4507: every edge strategy found the 2 cards, gap detection found nothing, and the blind uniform 4×2 split then out-voted the 2 contours (that rule exists for scanned sheets where edges under-find). New Strategy E in `ImprovedCardDetector`: a brightness threshold — light cards on a dark background are filled blobs, so each is one contour with card aspect. Two-level Otsu (a second cut over the bright class) separates desk glare from paper; the stage is skipped on light-background frames (mask mostly white or Otsu > 200), so white scans are unaffected. A blob result is *confident* (a filled blob with card aspect can't be a crease or a printed rule) and wins ties against edge contours and blocks the uniform split. Audit over the archived originals: IMG_4507 8 → 2 (Dimitra Malliarou / Henrik Kalbau both extracted, 19 s each), every other count unchanged (single-card photos 1, IMG_4475 8, Steinweg p1 8, page_1_sample 5, IMG_1584 14, IMG_1544 7, IMG_8706 7, YOUR_8CARD 5). Synthetic regression test added; 400 tests pass.
+
+### Known residue
+
+- Light cards on a *light* desk with no gaps (IMG_4161 → 6 tiles, IMG_4491 → 8) still fall to the uniform split.
+
+---
+
 ## [2.1.43] — 2026-10-21
 
 ### Fixed
