@@ -99,6 +99,13 @@ class TestContactInfo:
         assert not contact.has_minimum_data()
         assert contact.get_display_name() == "Unknown"
 
+    def test_corporate_card_counts_as_minimum_data(self):
+        # Oldendorff case: company + phone + address, no person, no email.
+        assert ContactInfo(company="Oldendorff Carriers GmbH & Co. KG", phone="+49 40 8000 88-0").has_minimum_data()
+        assert ContactInfo(company="Acme", website="https://acme.com").has_minimum_data()
+        assert not ContactInfo(company="Acme").has_minimum_data()  # company alone is not a contact
+        assert not ContactInfo(phone="+49 40 8000 88-0").has_minimum_data()
+
     def test_legacy_dict_roundtrip(self):
         original = {
             "firstName": "João",
@@ -371,3 +378,14 @@ if __name__ == "__main__":
 
         runner = unittest.TextTestRunner(verbosity=2)
         runner.run(suite)
+
+
+class TestCorporateCardVcf:
+    def test_filename_and_validation_use_company(self):
+        from utils.vcf_generator import VCFGenerator
+
+        gen = VCFGenerator()
+        cd = {"company": "OLDENDORFF CARRIERS GmbH & Co. KG", "phone": "+49 40 8000 88-0"}
+        assert gen.contact_to_filename(cd) == "OLDENDORFF_CARRIERS_GmbH__Co_KG"
+        assert gen.validate_contact_data(cd)
+        assert not gen.validate_contact_data({"company": "Acme"})

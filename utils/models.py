@@ -107,7 +107,15 @@ class ContactInfo:
         return " ".join(parts) if parts else "Unknown"
 
     def has_minimum_data(self) -> bool:
-        return bool(self.full_name or self.first_name or self.last_name or self.email)
+        """A usable contact: a person (name or email), or a corporate card —
+        company plus at least one way to reach it (phone, website, address).
+        Company-only cards used to be discarded as "no usable contact data"
+        and replaced by the bare QR URL, losing company/address/phone."""
+        if self.full_name or self.first_name or self.last_name or self.email:
+            return True
+        if self.company and (self.phone or self.mobile or self.website or self.address):
+            return True
+        return False
 
     def to_legacy_dict(self) -> dict:
         """Convert to legacy dictionary format for backward compatibility with existing modules."""

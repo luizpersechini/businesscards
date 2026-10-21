@@ -264,6 +264,9 @@ class VCFGenerator:
             name = f"{first}_{last}".strip('_')
         elif contact_data.get('email') and not self._is_placeholder(contact_data.get('email', '')):
             name = contact_data['email'].split('@')[0]
+        elif contact_data.get('company') and not self._is_placeholder(contact_data['company']):
+            # Corporate card (no person): name the file after the company.
+            name = contact_data['company']
         else:
             name = f"contact_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
         
@@ -290,8 +293,13 @@ class VCFGenerator:
             contact_data.get('lastName')
         )
         has_email = contact_data.get('email')
-        
-        return has_name or has_email
+        # Corporate card: company + a way to reach it (mirrors
+        # ContactInfo.has_minimum_data).
+        has_corporate = contact_data.get('company') and any(
+            contact_data.get(k) for k in ('phone', 'mobile', 'website', 'address')
+        )
+
+        return bool(has_name or has_email or has_corporate)
     
     def preview_vcard(self, contact_data: Dict) -> str:
         """

@@ -260,7 +260,11 @@ class OllamaVisionProvider(VisionProvider):
                 # usable contact data" — the raw reply is otherwise lost.
                 # Log enough to tell a parse failure from a genuine blank.
                 _cd = contact_dict or {}
-                if not any(_cd.get(k) for k in ("fullName", "firstName", "lastName", "email")):
+                _has_person = any(_cd.get(k) for k in ("fullName", "firstName", "lastName", "email"))
+                _has_corporate = _cd.get("company") and any(
+                    _cd.get(k) for k in ("phone", "mobile", "website", "address")
+                )
+                if not _has_person and not _has_corporate:
                     msg = (
                         f"⚠ {self.config.model_name}: reply produced no name/email "
                         f"(json_schema={use_json_schema}, parsed_keys="

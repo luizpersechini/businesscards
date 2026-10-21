@@ -5800,7 +5800,7 @@
           }
           setTimeout(() => setRescanState(null), 8000);
         };
-        const initials = (c.contact.fullName || "?")
+        const initials = (c.contact.fullName || c.contact.company || "?")
           .split(" ")
           .slice(0, 2)
           .map((w) => w[0])
@@ -5881,7 +5881,7 @@
                       color: "var(--text-primary)",
                     }}
                   >
-                    {c.contact.fullName}
+                    {c.contact.fullName || c.contact.company}
                   </span>
                   {isNew && (
                     <span
@@ -8664,7 +8664,7 @@
                           }}
                         >
                           {run.cards.map((card, i) => {
-                            const initials = (card.contact.fullName || "?")
+                            const initials = (card.contact.fullName || card.contact.company || "?")
                               .split(" ")
                               .slice(0, 2)
                               .map((w) => w[0])
@@ -8713,7 +8713,7 @@
                                       color: "var(--text-primary)",
                                     }}
                                   >
-                                    {card.contact.fullName}
+                                    {card.contact.fullName || card.contact.company}
                                   </div>
                                   <div
                                     style={{
@@ -9885,7 +9885,7 @@
                       marginBottom: 0,
                     }}
                   >
-                    {card.contact.fullName || "Untitled Contact"}
+                    {card.contact.fullName || card.contact.company || "Untitled Contact"}
                   </p>
                 </div>
                 <button

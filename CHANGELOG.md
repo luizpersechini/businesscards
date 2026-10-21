@@ -2,6 +2,14 @@
 
 All notable changes to the Business Card Scanner project will be documented in this file.
 
+## [2.1.43] — 2026-10-21
+
+### Fixed
+
+- **Corporate cards (no person, no email) were saved as a bare QR link.** Two Oldendorff cards — company, address, phone, website, QR → qrco.de — came back as `website` + "Contact extracted from QR code" and nothing else. qwen read every field correctly; `ContactInfo.has_minimum_data()` required a name or email, so the vision result was discarded as "no usable contact data" and the QR-only fallback won. A contact now counts as usable when it has a person (name/email) **or** a company plus a way to reach it (phone/mobile/website/address). Same rule in `VCFGenerator.validate_contact_data`; the VCF filename falls back to the company instead of `contact_<timestamp>`; the Ollama diagnostic no longer flags such cards; the Contacts/Scanner rows show the company in the name slot when there is no person. Verified on the archived crop: `OLDENDORFF CARRIERS GmbH & Co. KG · +49 40 8000 88-0 · Emporio Tower, Valentinskamp 70, 20355 Hamburg · oldendorff.com` via QR hybrid in 8 s. Existing Oldendorff entries: hit **Rescan**. 399 tests pass.
+
+---
+
 ## [2.1.42] — 2026-10-21
 
 ### Fixed
