@@ -2,6 +2,14 @@
 
 All notable changes to the Business Card Scanner project will be documented in this file.
 
+## [2.1.45] — 2026-10-28
+
+### Added
+
+- **Duplicate flag right after a scan.** When a card is saved as a *new* contact, the server checks it against the repository on the spot (`ContactsRepository.find_duplicates_of`, same conservative rule as the Duplicates modal: matching name with 2+ shared tokens plus the same company or phone — same-email cases never get here because `add_contact` already merges them). Matches ride on the card as `duplicates: [{id, fullName, company, email, reason, addedAt, locked}]`. The Scanner result card shows an amber "possible duplicate of <name>" badge instead of "new", the expanded card lists the matches with a **Merge into existing** button (calls `/api/contacts/merge`, target = the older record, non-destructive, the new entry is dropped), and a banner at the top of the results counts flagged cards. Verified end to end: a Henrik Kalbau card with no email scanned after the real one → flagged "same name + company", merged into the existing record, one Kalbau left. A first-time person is not flagged. 404 tests pass.
+
+---
+
 ## [2.1.44] — 2026-10-21
 
 ### Fixed

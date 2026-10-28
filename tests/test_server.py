@@ -388,3 +388,24 @@ def test_rescan_with_no_extraction_is_422(client, monkeypatch, tmp_path):
     _rescan_setup(client, monkeypatch, tmp_path, card=None)
     r = client.post("/api/contacts/c1/rescan", json={})
     assert r.status_code == 422
+
+
+# ── duplicate flag on freshly-added cards ───────────────────────────────────
+
+
+def test_frontend_mapper_emits_duplicates_for_new_entry():
+    card = {
+        "contact_data": {"fullName": "Henrik Kalbau", "company": "OLDENDORFF"},
+        "_repo_status": "added",
+        "_repo_id": "new1",
+        "_duplicates": [
+            {"id": "old1", "fullName": "Henrik Kalbau", "company": "Oldendorff Carriers",
+             "email": "h@oldendorff.com", "reason": "same name + company", "addedAt": "2026-05-01", "locked": False}
+        ],
+    }
+    out = server._contact_data_to_frontend(card, "x.heic", 0)
+    assert out["repoStatus"] == "added"
+    assert out["duplicates"][0]["id"] == "old1"
+    assert out["duplicates"][0]["reason"] == "same name + company"
+    # Cards without the stash get an empty list, never a missing key.
+    assert server._contact_data_to_frontend({"contact_data": {"fullName": "X"}}, "y", 0)["duplicates"] == []

@@ -453,6 +453,7 @@ def _contact_data_to_frontend(
         "repoStatus": card.get("_repo_status", ""),  # added|updated|merged|conflict
         "additions": card.get("_additions") or {},
         "conflicts": card.get("_conflicts") or [],
+        "duplicates": card.get("_duplicates") or [],  # possible dupes of a NEW entry
         "detectedLang": detected_lang,
         "qrUrl": qr_url,
         "source": source_file,
@@ -1131,6 +1132,17 @@ async def _scan_generator(
                     card["_additions"] = add_result["additions"]
                 if add_result.get("conflicts"):
                     card["_conflicts"] = add_result["conflicts"]
+                # A brand-new entry may still be the same person under a
+                # different (or missing) email — flag it now, while the
+                # user is looking at the card, instead of in the
+                # Duplicates modal weeks later.
+                if card["_repo_status"] == "added" and card["_repo_id"]:
+                    try:
+                        dups = _contacts.find_duplicates_of(card["_repo_id"])
+                    except Exception:
+                        dups = []
+                    if dups:
+                        card["_duplicates"] = dups
         except Exception as hist_err:
             # History persistence failure is non-fatal for the user-facing scan,
             # but we log it so silent breakage doesn't hide bugs.

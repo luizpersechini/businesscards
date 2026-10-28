@@ -627,3 +627,35 @@ class TestApplyRescan(unittest.TestCase):
 
     def test_unknown_id_returns_none(self):
         self.assertIsNone(self.repo.apply_rescan("nope", {"fullName": "X"}))
+
+
+class TestFindDuplicatesOf(unittest.TestCase):
+    def setUp(self):
+        import tempfile
+
+        self.tmp = tempfile.TemporaryDirectory()
+        self.repo = ContactsRepository(repo_path=os.path.join(self.tmp.name, "c.json"))
+        self.old = self.repo.add_contact(
+            {"fullName": "Henrik Kalbau", "company": "Oldendorff Carriers", "email": "h.kalbau@oldendorff.com"}
+        )["id"]
+        self.repo.add_contact({"fullName": "Maria Souza", "company": "Vale", "email": "maria@vale.com"})
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_same_person_different_email_is_flagged(self):
+        new = self.repo.add_contact(
+            {"fullName": "Henrik Kalbau", "company": "OLDENDORFF", "email": "henrik.kalbau@oldendorff.com"}
+        )
+        self.assertEqual(new["status"], "added")  # different email → not auto-merged
+        dups = self.repo.find_duplicates_of(new["id"])
+        self.assertEqual([d["id"] for d in dups], [self.old])
+        self.assertEqual(dups[0]["reason"], "same name + company")
+        self.assertEqual(dups[0]["fullName"], "Henrik Kalbau")
+
+    def test_new_person_not_flagged(self):
+        new = self.repo.add_contact({"fullName": "Dimitra Malliarou", "company": "OLDENDORFF"})
+        self.assertEqual(self.repo.find_duplicates_of(new["id"]), [])
+
+    def test_unknown_id(self):
+        self.assertEqual(self.repo.find_duplicates_of("nope"), [])

@@ -524,6 +524,38 @@ class ContactsRepository:
             out.append({"reason": reasons.get(root, "duplicate"), "contacts": members})
         return out
 
+    def find_duplicates_of(self, contact_id: str) -> List[Dict]:
+        """Existing contacts that look like duplicates of `contact_id`, by
+        the same conservative pair rule as `find_duplicates`. Used right
+        after a scan saves a NEW contact (same-email cases never get here:
+        add_contact already merged them). Each item: {id, fullName,
+        company, email, reason}, oldest first (the natural merge target).
+        """
+        me = next((c for c in self._contacts if c.get("id") == contact_id), None)
+        if not me:
+            return []
+        out = []
+        for other in self._contacts:
+            if other is me or other.get("id") == contact_id:
+                continue
+            reason = self._is_duplicate_pair(me, other)
+            if not reason:
+                continue
+            cd = other.get("contact_data") or {}
+            out.append(
+                {
+                    "id": other.get("id", ""),
+                    "fullName": (cd.get("fullName") or f"{cd.get('firstName', '')} {cd.get('lastName', '')}").strip(),
+                    "company": cd.get("company") or "",
+                    "email": cd.get("email") or "",
+                    "locked": bool(other.get("locked")),
+                    "addedAt": (other.get("added_at") or "")[:10],
+                    "reason": reason,
+                }
+            )
+        out.sort(key=lambda d: d["addedAt"])
+        return out
+
     def fingerprint(self) -> str:
         """Cheap hash of current state — changes whenever contacts change."""
         return f"{len(self._contacts)}:{sum(hash(c.get('id', '')) for c in self._contacts)}"

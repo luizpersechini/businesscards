@@ -18,7 +18,7 @@ bash setup.sh                # first-time setup (creates .venv, installs from re
 ## Test
 
 ```
-.venv/bin/python -m pytest   # 400 tests (see pyproject.toml for config)
+.venv/bin/python -m pytest   # 404 tests (see pyproject.toml for config)
 pytest --cov=utils           # with coverage report → htmlcov/
 ```
 
@@ -32,7 +32,7 @@ pytest --cov=utils           # with coverage report → htmlcov/
 - `utils/qr_reader.py` — zxing-cpp primary + OpenCV fallback (pyzbar disabled)
 - `utils/qr_url_resolver.py` — safe fetch+parse of QR-linked contact pages (SSRF-guarded)
 - `utils/model_benchmark.py` — score models vs locked contacts; field-match logic + company aliases
-- `utils/contacts_repository.py` — atomic JSON store, locked-field protection, dedup/merge, `apply_rescan` (id-keyed refresh from the stored crop)
+- `utils/contacts_repository.py` — atomic JSON store, locked-field protection, dedup/merge (`find_duplicates`, `find_duplicates_of` for the post-scan flag), `apply_rescan` (id-keyed refresh from the stored crop)
 - `utils/providers/base.py` — extraction prompt + post-processing repairs (CJK sprinkle repair, `detect_cjk_script`, field-permutation, echo strip, title demotion)
 - `utils/` — other vision providers, image processing, export logic, FastAPI helpers
 - `tests/` — pytest test suite
