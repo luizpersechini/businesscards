@@ -7,7 +7,7 @@ Local-first, AI-powered business card scanner. Drop in JPEG / PNG / PDF cards, g
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](#-license)
 [![Last commit](https://img.shields.io/github/last-commit/luizpersechini/businesscards.svg)](https://github.com/luizpersechini/businesscards/commits/main)
 
-> **v2.1** — FastAPI + React frontend, multi-provider LLM strategy (Ollama / vLLM / Claude / OpenAI), model benchmarking against your own verified contacts, QR-link resolution, duplicate detection, 362-test suite, CI on Python 3.10/3.11/3.12.
+> **v2.1** — FastAPI + React frontend, multi-provider LLM strategy (Ollama / vLLM / Claude / OpenAI), model benchmarking against your own verified contacts, QR-link resolution, duplicate detection, 408-test suite, CI on Python 3.10/3.11/3.12.
 
 ---
 
@@ -226,7 +226,7 @@ Switch the detection mode to **Manual — Grid Layout** in the settings panel an
 ## 🧪 Tests
 
 ```bash
-pytest tests/                           # 362 tests, ~2 s
+pytest tests/                           # 408 tests, ~3 s
 pytest tests/ --cov=utils               # with coverage report (htmlcov/)
 ```
 
@@ -252,7 +252,7 @@ Providers' heavy network paths are intentionally not covered in unit tests; ever
 
 ## 📜 Changelog
 
-See [`CHANGELOG.md`](CHANGELOG.md) for the full history. v2.0: Streamlit removed, FastAPI/React frontend, multi-provider strategy, full test suite + CI. v2.1 (latest): model benchmarking vs verified contacts, qwen2.5vl default, zxing-cpp QR, QR-link resolution, duplicate detection, atomic contacts store, email-anchored field repair.
+See [`CHANGELOG.md`](CHANGELOG.md) for the full history. v2.0: Streamlit removed, FastAPI/React frontend, multi-provider strategy, full test suite + CI. v2.1 (latest): model benchmarking vs verified contacts, qwen2.5vl default, zxing-cpp QR, QR-link resolution, duplicate detection (incl. a flag right after scanning), atomic contacts store, email-anchored field repair, CJK card translation, rescan from the stored crop, and sheet detection up to ~18 cards (bright-blob + lattice-completion strategies).
 
 ## 📄 License
 

@@ -22,7 +22,7 @@ ollama pull qwen2.5vl:7b        # default vision model
 Run the automated suite with:
 
 ```bash
-.venv/bin/python -m pytest      # 362 tests
+.venv/bin/python -m pytest      # 408 tests
 ```
 
 ## Quick Test Checklist
