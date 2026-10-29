@@ -2,6 +2,21 @@
 
 All notable changes to the Business Card Scanner project will be documented in this file.
 
+## [2.1.47] — 2026-10-29
+
+### Fixed
+
+- **White cards on a white desk are now found, and every box is a rectangle.** Two changes in `ImprovedCardDetector`:
+  - *Strategy F — lattice completion.* On a sheet photo the cards that were found reveal the layout: row/column centres (1-D clustering of card centres, tolerance 0.4× median card size) plus the median card size. A white card with no visible edge can't be seen by any edge strategy, but its lattice cell is known; an empty cell is accepted when it has ink (adaptive-threshold mask ≥ max(0.4%, 0.4× the least-inked found card)) **and** is about as bright as the found cards (±60 grey levels — a dark textured desk is full of "ink" and was accepted on IMG_4506 before that guard). Runs when ≥ 4 cards were found; a lattice with more than twice as many cells as cards is not believed. A found box under 75% of the median area hugged its printed text rather than the card edge and is snapped back to its cell.
+  - *Min-area rectangles.* The region kept for each contour is its `minAreaRect` quad, perspective-corrected via `four_point_transform`, and the stored contour is that quad — so the preview draws a rectangle (it drew the raw 5–8-vertex polygon hugging the text) and the crop is the whole card (it was a 5-px-padded bounding box for non-4-point hits).
+  - Audit over the 107 archived originals vs v2.1.46: IMG_4675 12 → **15/15**, IMG_1544 14 → **18/18**, IMG_8943 13 → **15/15**, IMG_1584 14 → 15 (Tulio Teixeira), 8-card PDF page 5 → 6 (Miriam Signor), Steinweg p2 4 → 6; every other count unchanged (IMG_4475 8, IMG_4507 2, single-card photos 1). Three synthetic tests (borderless cells filled, every region 4-point, bare desk cell not a card); 408 tests pass.
+
+### Known residue
+
+- Cells cut off by the frame edge are not filled (the top row of Steinweg p2 at 10% outside). Irregular layouts get no fill-ins by design.
+
+---
+
 ## [2.1.46] — 2026-10-29
 
 ### Fixed

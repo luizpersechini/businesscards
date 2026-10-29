@@ -9,6 +9,14 @@ import numpy as np
 from typing import List, Tuple
 import imutils
 
+# Strategy F (lattice completion) tunables — see _complete_lattice.
+MIN_LATTICE_CARDS = 4  # need this many found cards to trust a lattice
+LATTICE_TOL = 0.4  # row/col clustering tolerance, fraction of median card size
+LATTICE_SNAP_FRACTION = 0.75  # a box under this fraction of median area hugged text
+LATTICE_MIN_INK = 0.004  # absolute ink floor for an empty cell to count as a card
+LATTICE_INK_RATIO = 0.4  # ...or this fraction of the least-inked found card
+LATTICE_BRIGHTNESS_TOL = 60  # empty cell must be about as bright as the found cards
+
 
 class ImprovedCardDetector:
     """
@@ -131,6 +139,16 @@ class ImprovedCardDetector:
 
         detected_cards = best_cards
 
+        # Strategy F: lattice completion. On a sheet photo the cards that
+        # WERE found reveal the layout (row/column centres + median card
+        # size). A white card on a white desk has no edge at all, so no
+        # strategy above can see it — but the lattice cell it sits in is
+        # known, and ink in that cell means a card. (IMG_4675: 12 -> 15,
+        # IMG_1544: 14 -> 18, IMG_8943: 13 -> 15.) Also snaps a box that
+        # only hugged the text back to its full cell.
+        if len(detected_cards) >= MIN_LATTICE_CARDS:
+            detected_cards = self._complete_lattice(original, detected_cards)
+
         # ── Fallbacks ──────────────────────────────────────────────────────
         # If contour detection found fewer than 4 cards, try edge-density
         # grid detection.
@@ -202,6 +220,112 @@ class ImprovedCardDetector:
             detected_cards.append((original, None))
 
         return detected_cards
+
+    def _complete_lattice(
+        self, original: np.ndarray, cards: List[Tuple[np.ndarray, np.ndarray]]
+    ) -> List[Tuple[np.ndarray, np.ndarray]]:
+        """Fill empty cells of the grid the detected cards form (Strategy F).
+
+        Rows and columns are 1-D clusters of the card centres; the cell size
+        is the median card. An empty cell is accepted as a card when it has
+        ink (adaptive-threshold mask) above a floor derived from the least
+        inked card already found — a blank patch of desk is not a card. A
+        found card whose box is < LATTICE_SNAP_FRACTION of the median area
+        hugged its text rather than its edge and is snapped to its cell.
+        Cards outside any lattice logic (irregular layouts) are untouched;
+        a lattice with more than twice as many cells as cards is not
+        believed at all.
+        """
+        H, W = original.shape[:2]
+        boxes = [cv2.boundingRect(cnt) for _, cnt in cards if cnt is not None]
+        if len(boxes) < MIN_LATTICE_CARDS:
+            return cards
+        mw = float(np.median([b[2] for b in boxes]))
+        mh = float(np.median([b[3] for b in boxes]))
+        if mw <= 0 or mh <= 0:
+            return cards
+
+        def _cluster(vals: List[float], tol: float) -> List[float]:
+            vals = sorted(vals)
+            groups: List[List[float]] = [[vals[0]]]
+            for v in vals[1:]:
+                if v - float(np.mean(groups[-1])) <= tol:
+                    groups[-1].append(v)
+                else:
+                    groups.append([v])
+            return [float(np.mean(g)) for g in groups]
+
+        cols = _cluster([b[0] + b[2] / 2 for b in boxes], LATTICE_TOL * mw)
+        rows = _cluster([b[1] + b[3] / 2 for b in boxes], LATTICE_TOL * mh)
+        if len(rows) * len(cols) > 2 * len(boxes):
+            return cards
+
+        gray = cv2.cvtColor(original, cv2.COLOR_BGR2GRAY)
+        ink = cv2.adaptiveThreshold(
+            cv2.GaussianBlur(gray, (5, 5), 0),
+            255,
+            cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+            cv2.THRESH_BINARY_INV,
+            31,
+            15,
+        )
+        ink = cv2.morphologyEx(ink, cv2.MORPH_OPEN, cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3)))
+
+        def _ink_fraction(x: float, y: float, w: float, h: float) -> float:
+            x1, y1 = max(0, int(x)), max(0, int(y))
+            x2, y2 = min(W, int(x + w)), min(H, int(y + h))
+            if x2 <= x1 or y2 <= y1:
+                return 0.0
+            return float(ink[y1:y2, x1:x2].mean()) / 255.0
+
+        def _cell(cx: float, cy: float):
+            x1, y1 = int(max(0, cx - mw / 2)), int(max(0, cy - mh / 2))
+            x2, y2 = int(min(W, cx + mw / 2)), int(min(H, cy + mh / 2))
+            quad = np.array([[x1, y1], [x2, y1], [x2, y2], [x1, y2]], dtype=np.int32)
+            return original[y1:y2, x1:x2].copy(), quad.reshape(-1, 1, 2)
+
+        # Snap text-hugging boxes to their cell.
+        out: List[Tuple[np.ndarray, np.ndarray]] = []
+        for (crop, cnt), b in zip([c for c in cards if c[1] is not None], boxes):
+            cx, cy = b[0] + b[2] / 2, b[1] + b[3] / 2
+            if b[2] * b[3] < LATTICE_SNAP_FRACTION * mw * mh:
+                r = min(rows, key=lambda v: abs(v - cy))
+                c = min(cols, key=lambda v: abs(v - cx))
+                out.append(_cell(c, r))
+            else:
+                out.append((crop, cnt))
+        out.extend(c for c in cards if c[1] is None)
+
+        found_ink = [_ink_fraction(*b) for b in boxes]
+        threshold = max(LATTICE_MIN_INK, LATTICE_INK_RATIO * min(found_ink))
+
+        def _mean_gray(x: float, y: float, w: float, h: float) -> float:
+            x1, y1 = max(0, int(x)), max(0, int(y))
+            x2, y2 = min(W, int(x + w)), min(H, int(y + h))
+            return float(gray[y1:y2, x1:x2].mean()) if x2 > x1 and y2 > y1 else 0.0
+
+        # A dark textured desk is full of "ink" to an adaptive threshold
+        # (IMG_4506: an empty desk cell was accepted). A card cell must
+        # also be about as bright as the cards that were found — the
+        # whole point is white cards on a white desk.
+        card_gray = float(np.median([_mean_gray(*b) for b in boxes]))
+        for cy in rows:
+            for cx in cols:
+                if any(
+                    abs(cx - (b[0] + b[2] / 2)) < LATTICE_TOL * mw
+                    and abs(cy - (b[1] + b[3] / 2)) < LATTICE_TOL * mh
+                    for b in boxes
+                ):
+                    continue
+                x, y = cx - mw / 2, cy - mh / 2
+                # A cell must lie (almost) inside the frame.
+                if x < -0.1 * mw or y < -0.1 * mh or x + mw > W + 0.1 * mw or y + mh > H + 0.1 * mh:
+                    continue
+                if abs(_mean_gray(x, y, mw, mh) - card_gray) > LATTICE_BRIGHTNESS_TOL:
+                    continue
+                if _ink_fraction(x, y, mw, mh) >= threshold:
+                    out.append(_cell(cx, cy))
+        return out
 
     def _bright_blob_cards(
         self,
@@ -291,27 +415,21 @@ class ImprovedCardDetector:
             if overlaps:
                 continue
 
-            # Extract card
-            if len(approx) == 4:
-                pts = approx.reshape(4, 2) * ratio
-                card_warped = self.four_point_transform(original, pts)
-            else:
-                x_orig = int(x * ratio)
-                y_orig = int(y * ratio)
-                w_orig = int(w * ratio)
-                h_orig = int(h * ratio)
-                padding = 5
-                y1 = max(0, y_orig - padding)
-                y2 = min(original.shape[0], y_orig + h_orig + padding)
-                x1 = max(0, x_orig - padding)
-                x2 = min(original.shape[1], x_orig + w_orig + padding)
-                card_warped = original[y1:y2, x1:x2]
+            # Extract card. A business card is a rectangle, so the region
+            # we keep is the contour's minimum-area rectangle, not the raw
+            # polygon: an edge contour on a white-on-white photo often hugs
+            # the printed text (concave, 5-8 vertices) and the preview drew
+            # that as a jagged shape while the crop was a padded bounding
+            # box. The min-area rect is the card itself, handles a slight
+            # tilt, and is perspective-corrected like a clean 4-point hit.
+            quad = cv2.boxPoints(cv2.minAreaRect(c)).astype(np.float32) * ratio
+            card_warped = self.four_point_transform(original, quad)
 
             if card_warped is not None and card_warped.shape[0] > 80 and card_warped.shape[1] > 80:
                 # Contours were found on the 500px-high working copy; return
-                # them in ORIGINAL image coordinates so overlays (preview)
-                # line up with the full-resolution crop.
-                c_orig = np.rint(c.astype(np.float32) * ratio).astype(np.int32)
+                # the quad in ORIGINAL image coordinates so overlays
+                # (preview) line up with the full-resolution crop.
+                c_orig = np.rint(quad).astype(np.int32).reshape(-1, 1, 2)
                 cards.append((card_warped, c_orig))
                 used_regions.append((x, y, w, h))
 

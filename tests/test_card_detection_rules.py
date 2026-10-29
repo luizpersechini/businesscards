@@ -185,3 +185,46 @@ class TestFifteenCardSheet:
         assert ImprovedCardDetector().min_area_percent == 2
         regions = ImprovedCardDetector().detect_cards(self._sheet())
         assert len(regions) >= 13, len(regions)
+
+
+class TestLatticeCompletion:
+    """IMG_4675 / IMG_1544 / IMG_8943: white cards on a white desk have no
+    edge at all, but the cards that were found reveal the lattice. An
+    empty cell with ink (and card-like brightness) is a card; a box that
+    hugged its text is snapped back to its cell. Every region is a
+    4-point rectangle (min-area rect), never a jagged polygon."""
+
+    @staticmethod
+    def _sheet(borderless=((0, 0), (1, 2), (3, 0)), text_only=()):
+        import cv2
+
+        img = np.full((3900, 3700, 3), 235, dtype=np.uint8)
+        for r in range(5):
+            for c in range(3):
+                y, x = 300 + r * 700, 250 + c * 1100
+                img[y : y + 550, x : x + 900] = 250
+                if (r, c) not in borderless:
+                    cv2.rectangle(img, (x, y), (x + 900, y + 550), (150, 150, 150), 2)
+                cv2.putText(img, "Name Surname", (x + 60, y + 120), cv2.FONT_HERSHEY_SIMPLEX, 2, (40, 40, 40), 4)
+                cv2.putText(img, "Title, Department", (x + 60, y + 260), cv2.FONT_HERSHEY_SIMPLEX, 1.6, (40, 40, 40), 3)
+                cv2.putText(img, "+55 11 9999 9999  name@co.com", (x + 60, y + 360), cv2.FONT_HERSHEY_SIMPLEX, 1.4, (40, 40, 40), 3)
+                cv2.putText(img, "COMPANY", (x + 60, y + 480), cv2.FONT_HERSHEY_SIMPLEX, 2.5, (40, 40, 40), 6)
+        return img
+
+    def test_borderless_cells_are_filled(self, detector):
+        regions = detector.detect_cards(self._sheet())
+        assert len(regions) == 15, len(regions)
+
+    def test_every_region_is_a_rectangle(self, detector):
+        for crop, cnt in detector.detect_cards(self._sheet()):
+            assert cnt is not None
+            assert cnt.shape[0] == 4, cnt.shape
+            h, w = crop.shape[:2]
+            assert 1.3 < w / h < 2.0
+
+    def test_empty_desk_cell_is_not_a_card(self, detector):
+        # 5x3 lattice with one genuinely empty cell (bare desk, no card).
+        img = self._sheet(borderless=())
+        y, x = 300 + 2 * 700, 250 + 1 * 1100
+        img[y - 50 : y + 600, x - 50 : x + 950] = 235
+        assert len(detector.detect_cards(img)) == 14
