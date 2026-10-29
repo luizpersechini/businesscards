@@ -15,12 +15,12 @@ class ImprovedCardDetector:
     Enhanced card detector using document scanner algorithms.
     """
 
-    def __init__(self, min_area_percent=5, max_area_percent=40):
+    def __init__(self, min_area_percent=2, max_area_percent=40):
         """
         Initialize the improved card detector.
 
         Args:
-            min_area_percent: Minimum area as percentage of image (default 5%)
+            min_area_percent: Minimum area as percentage of image (default 2%)
             max_area_percent: Maximum area as percentage of image (default 40%)
         """
         self.min_area_percent = min_area_percent

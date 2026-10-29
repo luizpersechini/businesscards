@@ -20,7 +20,7 @@ class AppConfig:
     
     # Card detection configuration
     detection_mode: str = "Automatic"  # "Automatic", "Manual - Single Card", "Manual - Grid Layout"
-    min_card_percent: int = 5  # Minimum card area as % of image
+    min_card_percent: int = 2  # Minimum card area as % of image (15-card sheets: each card ~3.6%)
     max_card_percent: int = 40  # Maximum card area as % of image
     
     # Grid layout defaults
@@ -61,7 +61,7 @@ class AppConfig:
             vision_model=os.getenv("VISION_MODEL", "qwen2.5vl:7b"),
             vision_timeout=int(os.getenv("VISION_TIMEOUT", "300")),
             detection_mode=os.getenv("DETECTION_MODE", "Automatic"),
-            min_card_percent=int(os.getenv("MIN_CARD_PERCENT", "5")),
+            min_card_percent=int(os.getenv("MIN_CARD_PERCENT", "2")),
             max_card_percent=int(os.getenv("MAX_CARD_PERCENT", "40")),
             grid_rows=int(os.getenv("GRID_ROWS", "2")),
             grid_cols=int(os.getenv("GRID_COLS", "2")),

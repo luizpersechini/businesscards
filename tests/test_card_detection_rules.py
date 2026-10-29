@@ -157,3 +157,31 @@ class TestBrightCardsOnDarkDesk:
         for crop, _ in regions:
             h, w = crop.shape[:2]
             assert 1.3 < w / h < 1.9  # whole card, not a tile
+
+
+class TestFifteenCardSheet:
+    """IMG_4675 / IMG_8943: a 5x3 sheet of 15 cards. Each card is ~3.6% of
+    the frame, under the old 5% minimum, so every edge strategy threw all
+    15 contours away and the gap fallback returned the whole frame as ONE
+    card. The floor is now 2% (QR codes and logos stay well under 1%)."""
+
+    @staticmethod
+    def _sheet():
+        import cv2
+
+        img = np.full((3900, 3700, 3), 215, dtype=np.uint8)  # light desk
+        for r in range(5):
+            for c in range(3):
+                y, x = 300 + r * 700, 250 + c * 1100
+                img[y : y + 550, x : x + 900] = 250
+                cv2.rectangle(img, (x, y), (x + 900, y + 550), (150, 150, 150), 6)
+                cv2.putText(img, "Name Surname", (x + 60, y + 120), cv2.FONT_HERSHEY_SIMPLEX, 2, (40, 40, 40), 4)
+                cv2.putText(img, "COMPANY", (x + 60, y + 460), cv2.FONT_HERSHEY_SIMPLEX, 2.5, (40, 40, 40), 6)
+        return img
+
+    def test_default_floor_admits_small_sheet_cards(self):
+        from utils.improved_card_detector import ImprovedCardDetector
+
+        assert ImprovedCardDetector().min_area_percent == 2
+        regions = ImprovedCardDetector().detect_cards(self._sheet())
+        assert len(regions) >= 13, len(regions)

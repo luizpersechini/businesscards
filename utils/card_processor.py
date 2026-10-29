@@ -35,7 +35,7 @@ class CardProcessor:
     def __init__(
         self,
         provider_factory: ProviderFactory,
-        min_card_percent: int = 5,
+        min_card_percent: int = 2,
         max_card_percent: int = 40,
         qr_preprocessing_variants: int = 5,
     ):

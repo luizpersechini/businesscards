@@ -15,7 +15,7 @@ class TestAppConfig:
         config = AppConfig()
         assert config.vision_model == "qwen2.5vl:7b"
         assert config.vision_timeout == 300
-        assert config.min_card_percent == 5
+        assert config.min_card_percent == 2
         assert config.max_card_percent == 40
         assert config.grid_rows == 2
         assert config.grid_cols == 2

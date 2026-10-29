@@ -2,6 +2,18 @@
 
 All notable changes to the Business Card Scanner project will be documented in this file.
 
+## [2.1.46] — 2026-10-29
+
+### Fixed
+
+- **A 15-card sheet came back as one card.** IMG_4675 (5×3 cards on a light desk): every edge strategy found the cards (Canny-low: 13) but the detector's minimum card area was 5% of the frame and each card on a 15-card sheet is ~3.6%, so all contours were discarded as "too small"; gap detection then returned the whole frame as a single confident card. Floor lowered to 2% (`ImprovedCardDetector`, `CardProcessor`, `AppConfig`/`MIN_CARD_PERCENT`) — QR codes and logos stay well under 1%, so the filter they were meant for still holds. Audit over the 107 archived originals, 5% → 2%: IMG_4675 1 → 12, IMG_8943 1 → 13 (it was a 15-card sheet all along, previously logged as a "single card"), IMG_1544 7 → 14 (of 18), IMG_8706 7 → 8 (of 8); every other count unchanged. Synthetic 15-card regression test added; 405 tests pass.
+
+### Known residue
+
+- White cards on a white desk with no visible edge (3 of 15 on IMG_4675, 4 of 18 on IMG_1544) are still missed; one card with a strong printed rule (Fabio Accunzo) is split in two.
+
+---
+
 ## [2.1.45] — 2026-10-28
 
 ### Added

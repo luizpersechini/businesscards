@@ -18,7 +18,7 @@ bash setup.sh                # first-time setup (creates .venv, installs from re
 ## Test
 
 ```
-.venv/bin/python -m pytest   # 404 tests (see pyproject.toml for config)
+.venv/bin/python -m pytest   # 405 tests (see pyproject.toml for config)
 pytest --cov=utils           # with coverage report → htmlcov/
 ```
 
@@ -29,6 +29,7 @@ pytest --cov=utils           # with coverage report → htmlcov/
 - `business-card-reader/project/` — React component sources (jsx)
 - `utils/models.py` — dataclasses: ContactInfo, ScanResult, ProviderConfig
 - `utils/card_processor.py` — per-card orchestration (QR-first, then vision, then post-processing)
+- Detector minimum card area is **2%** of the frame (`MIN_CARD_PERCENT`). It was 5%, which silently threw away every card on a 15-card sheet (~3.6% each) and returned the whole frame as one card.
 - `utils/qr_reader.py` — zxing-cpp primary + OpenCV fallback (pyzbar disabled)
 - `utils/qr_url_resolver.py` — safe fetch+parse of QR-linked contact pages (SSRF-guarded)
 - `utils/model_benchmark.py` — score models vs locked contacts; field-match logic + company aliases
